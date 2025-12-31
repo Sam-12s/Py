@@ -1,0 +1,89 @@
+name: Update then Run 18 Scripts
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # -------------------------
+  # JOB 1: UPDATE (RUNS ONCE)
+  # -------------------------
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run update script
+        run: |
+          python scripts/update.py
+
+      - name: Upload updated scripts
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-scripts
+          path: scripts/
+
+  # -----------------------------------
+  # JOB 2: RUN 18 SCRIPTS (PARALLEL)
+  # -----------------------------------
+  run-scripts:
+    needs: update
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        script:
+          - AV1.py
+          - AV2.py
+          - AV3.py
+          - AV4.py
+          - AV5.py
+          - AV6.py
+          - AV7.py
+          - AV8.py
+          - AV9.py
+          - AV10.py
+          - AV11.py
+          - AV12.py
+          - AV13.py
+          - AV14.py
+          - AV15.py
+          - AV16.py
+          - AV17.py
+          - AV18.py
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download updated scripts
+        uses: actions/download-artifact@v4
+        with:
+          name: updated-scripts
+          path: scripts/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run script
+        run: |
+          python scripts/${{ matrix.script }}
