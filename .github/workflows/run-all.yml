@@ -32,7 +32,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: updated-scripts
-          path: scripts/
+          path: scripts/*
 
   # -----------------------------------
   # JOB 2: RUN 18 SCRIPTS (PARALLEL)
@@ -73,6 +73,10 @@ jobs:
         with:
           name: updated-scripts
           path: .
+      
+      
+      - name: List scripts folder
+        run: ls -R scripts/
 
       - name: Set up Python
         uses: actions/setup-python@v5
