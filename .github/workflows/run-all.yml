@@ -1,12 +1,12 @@
-name: Update then Run 18 Scripts
+name: Update then Run AV Scripts
 
 on:
   workflow_dispatch:
 
 jobs:
-  # -------------------------
-  # JOB 1: UPDATE (RUNS ONCE)
-  # -------------------------
+  # =========================
+  # JOB 1 — UPDATE FILES
+  # =========================
   update:
     runs-on: ubuntu-latest
 
@@ -17,77 +17,60 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run update script
-        run: |
-          python scripts/update.py
+      # 🔧 THIS OVERWRITES scripts/AV1.py … AV18.py
+      - name: Update prefixes in AV scripts
+        run: python scripts/update.py
 
+      # 📦 SAVE UPDATED FILES
       - name: Upload updated scripts
         uses: actions/upload-artifact@v4
         with:
           name: updated-scripts
-          path: scripts/*
+          path: scripts
 
-  # -----------------------------------
-  # JOB 2: RUN 18 SCRIPTS (PARALLEL)
-  # -----------------------------------
-  run-scripts:
+
+  # =========================
+  # JOB 2 — RUN AV SCRIPTS
+  # (MAX 18 JOBS TOTAL)
+  # =========================
+  run_avs:
     needs: update
     runs-on: ubuntu-latest
 
     strategy:
-      fail-fast: false
+      max-parallel: 18
       matrix:
-        script:
-          - AV1.py
-          - AV2.py
-          - AV3.py
-          - AV4.py
-          - AV5.py
-          - AV6.py
-          - AV7.py
-          - AV8.py
-          - AV9.py
-          - AV10.py
-          - AV11.py
-          - AV12.py
-          - AV13.py
-          - AV14.py
-          - AV15.py
-          - AV16.py
-          - AV17.py
-          - AV18.py
+        av: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 🔑 THIS IS THE MOST IMPORTANT STEP
+      # It REPLACES scripts/AV*.py with UPDATED ones
       - name: Download updated scripts
         uses: actions/download-artifact@v4
         with:
           name: updated-scripts
-          path: .
-      
-      
-      - name: List scripts folder
-        run: ls -R scripts/
+          path: scripts
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install dependencies
+      # 🧪 OPTIONAL SAFETY CHECK (RECOMMENDED)
+      - name: Show PREFIXES used by AV${{ matrix.av }}
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          grep -n "PREFIXES" scripts/AV${{ matrix.av }}.py | head -n 1
 
-      - name: Run script
-        run: |
-          python scripts/${{ matrix.script }}
+      # 🚀 RUN ONE AV SCRIPT PER JOB
+      - name: Run AV${{ matrix.av }}
+        run: python scripts/AV${{ matrix.av }}.py
