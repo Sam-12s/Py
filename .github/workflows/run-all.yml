@@ -19,16 +19,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install dependencies (update job)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt || true
 
-      # 🔧 THIS OVERWRITES scripts/AV1.py … AV18.py
       - name: Update prefixes in AV scripts
         run: python scripts/update.py
 
-      # 📦 SAVE UPDATED FILES
       - name: Upload updated scripts
         uses: actions/upload-artifact@v4
         with:
@@ -38,7 +36,6 @@ jobs:
 
   # =========================
   # JOB 2 — RUN AV SCRIPTS
-  # (MAX 18 JOBS TOTAL)
   # =========================
   run_avs:
     needs: update
@@ -52,13 +49,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
 
-      # 🔑 THIS IS THE MOST IMPORTANT STEP
-      # It REPLACES scripts/AV*.py with UPDATED ones
       - name: Download updated scripts
         uses: actions/download-artifact@v4
         with:
@@ -70,11 +61,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      # 🧪 OPTIONAL SAFETY CHECK (RECOMMENDED)
-      - name: Show PREFIXES used by AV${{ matrix.av }}
+      # 🔑 THIS WAS MISSING BEFORE
+      - name: Install dependencies (AV job)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt || pip install httpx
+
+      # 🧪 SAFETY CHECK (you can remove later)
+      - name: Show PREFIXES used
         run: |
           grep -n "PREFIXES" scripts/AV${{ matrix.av }}.py | head -n 1
 
-      # 🚀 RUN ONE AV SCRIPT PER JOB
       - name: Run AV${{ matrix.av }}
         run: python scripts/AV${{ matrix.av }}.py
