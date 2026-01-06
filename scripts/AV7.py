@@ -10,7 +10,7 @@ import random
 sys.stdout.reconfigure(line_buffering=True)
 
 
-MAX_RUNTIME_MINUTES = 350  # ⏱️ CHANGE THIS
+MAX_RUNTIME_MINUTES = 355  # ⏱️ CHANGE THIS
 START_TIME = datetime.now()
 END_TIME = START_TIME + timedelta(minutes=MAX_RUNTIME_MINUTES)
 
