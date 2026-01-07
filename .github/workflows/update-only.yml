@@ -35,17 +35,19 @@ jobs:
       - name: Update AV scripts
         run: python scripts/update.py
 
-      # ✅ COMMIT + PUSH (SAFE)
       - name: Commit updated scripts
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-
-          git fetch origin main
-          git rebase origin/main
-
+      
+          # Stage & commit FIRST
           git add scripts/AV*.py
           git commit -m "Auto-update AV prefixes" || echo "No changes to commit"
+      
+          # THEN sync with remote safely
+          git pull --rebase origin main
+      
+          # Push result
           git push
 
       # 📦 ARTIFACT (DOWNLOADABLE)
