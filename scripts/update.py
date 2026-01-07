@@ -8,26 +8,6 @@ from datetime import datetime, timedelta, timezone
 import time
 sys.stdout.reconfigure(line_buffering=True)
 
-WORKER_FILES = [
-    "AV1.py",
-    "AV2.py",
-    "AV3.py",
-    "AV4.py",
-    "AV5.py",
-    "AV6.py",
-    "AV7.py",
-    "AV8.py",
-    "AV9.py",
-    "AV10.py",
-    "AV11.py",
-    "AV12.py",
-    "AV13.py",
-    "AV14.py",
-    "AV15.py",
-    "AV16.py",
-    "AV17.py",
-    "AV18.py",
-]
 
 DEFAULT_PAYLOAD = {
     "defaultList": True,
@@ -211,7 +191,7 @@ def split_codes_among_files(nletter, n=1):
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-WORKER_FILES = [os.path.join(BASE_DIR, f"AV{i}.py") for i in range(1, 19)]
+WORKER_FILES = [os.path.join(BASE_DIR, f"AV{i}.py") for i in range(1, 55)]
 
 def update_bxx_file(fname, new_codes):
     if not os.path.exists(fname):
