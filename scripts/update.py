@@ -276,7 +276,7 @@ async def fetcher():
         return []
 
     # 🔹 STEP 2: Generate share codes
-    times = 510 # number of attempts
+    times = 1220 # number of attempts
     codes = await run_multiple_times(times)
 
     # 🔹 STEP 3: Analyze duplicates (FULL CODES)
