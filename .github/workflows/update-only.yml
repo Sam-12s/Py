@@ -3,20 +3,27 @@ name: Update AV Scripts Only
 on:
   workflow_dispatch:
 
+# Prevent overlapping update runs
+concurrency:
+  group: update-av-scripts
+  cancel-in-progress: true
 
+# REQUIRED for git push
 permissions:
-  contents: write 
+  contents: write
 
 jobs:
   update_only:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -28,14 +35,22 @@ jobs:
       - name: Update AV scripts
         run: python scripts/update.py
 
+      # ✅ COMMIT + PUSH (SAFE)
       - name: Commit updated scripts
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-      
+
           git fetch origin main
           git rebase origin/main
-      
+
           git add scripts/AV*.py
-          git commit -m "Auto-update AV prefixes" || echo "No changes"
+          git commit -m "Auto-update AV prefixes" || echo "No changes to commit"
           git push
+
+      # 📦 ARTIFACT (DOWNLOADABLE)
+      - name: Upload updated AV scripts (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-av-scripts
+          path: scripts/AV*.py
