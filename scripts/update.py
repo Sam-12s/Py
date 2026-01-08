@@ -191,7 +191,7 @@ def split_codes_among_files(nletter, n=1):
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-WORKER_FILES = [os.path.join(BASE_DIR, f"AV{i}.py") for i in range(1, 55)]
+WORKER_FILES = [os.path.join(BASE_DIR, f"AV{i}.py") for i in range(1, 34)]
 
 def update_bxx_file(fname, new_codes):
     if not os.path.exists(fname):
@@ -276,7 +276,7 @@ async def fetcher():
         return []
 
     # 🔹 STEP 2: Generate share codes
-    times = 1550 # number of attempts
+    times = 1450 # number of attempts
     codes = await run_multiple_times(times)
 
     # 🔹 STEP 3: Analyze duplicates (FULL CODES)
