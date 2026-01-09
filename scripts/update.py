@@ -191,7 +191,7 @@ def split_codes_among_files(nletter, n=1):
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-WORKER_FILES = [os.path.join(BASE_DIR, f"AV{i}.py") for i in range(1, 34)]
+WORKER_FILES = [os.path.join(BASE_DIR, f"AV{i}.py") for i in range(1, 39)]
 
 def update_bxx_file(fname, new_codes):
     if not os.path.exists(fname):
