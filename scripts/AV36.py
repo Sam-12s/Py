@@ -45,7 +45,7 @@ def init_db(db_name="OUTPUT.db"):
     conn.commit()
     conn.close()
 
-PREFIXES = ['QL2', 'MZY', 'GFF', 'M3B', 'LZP', 'Z8E', 'X8H', 'S5X', 'PHY', 'GG2', 'HGB', 'QNH', 'MHE', 'K16', 'QV8']
+PREFIXES = ['JCB', 'NKJ', 'JKP', 'Z7U', 'L7C', 'UEE', 'WRZ', 'PKT', 'VB1', 'P4H', 'ZA9', 'VSB', 'WTE', 'MY4', 'LUT', 'JT7', 'P39', 'PWE', 'PKD', 'RPE', 'K5S', 'MBT']
 
 USER_AGENTS = [
     # Desktop browsers
