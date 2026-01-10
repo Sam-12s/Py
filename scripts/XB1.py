@@ -15,7 +15,7 @@ START_TIME = datetime.now()
 END_TIME = START_TIME + timedelta(minutes=MAX_RUNTIME_MINUTES)
 
 STOP_EVENT = asyncio.Event()
-MAX_INITIAL_INVALID = 40
+MAX_INITIAL_INVALID = 99999999999999999999999999999999999999999999999999999999999999999
 
 
 def init_db(db_name="X-OUTPUT.db"):
@@ -294,7 +294,6 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
 
             if counting_enabled:
                 if result == "INVALID":
-                    invalid_count += 1
                     if invalid_count >= MAX_INITIAL_INVALID:
                         print(f"[{worker_id}] 🛑 stopped after INVALID limit")
                         return
