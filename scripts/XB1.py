@@ -15,7 +15,7 @@ START_TIME = datetime.now()
 END_TIME = START_TIME + timedelta(minutes=MAX_RUNTIME_MINUTES)
 
 STOP_EVENT = asyncio.Event()
-MAX_INITIAL_INVALID = 400000000000000000000
+MAX_INITIAL_INVALID = 50
 
 
 def init_db(db_name="X-OUTPUT.db"):
@@ -65,7 +65,7 @@ SUFFIX_CHARS = [
     'X', 'Y', 'Z'
 ]
 
-MAX_PARALLEL_PREFIXES = int(len(PREFIXES))  # start with 2–4
+MAX_PARALLEL_PREFIXES = 2  # start with 2–4
 
 PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
