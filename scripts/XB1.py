@@ -15,10 +15,10 @@ START_TIME = datetime.now()
 END_TIME = START_TIME + timedelta(minutes=MAX_RUNTIME_MINUTES)
 
 STOP_EVENT = asyncio.Event()
-MAX_INITIAL_INVALID = 40
+MAX_INITIAL_INVALID = 60
 
 
-def init_db(db_name="X-OUTPUT.db"):
+def init_db(db_name="OUTPUT.db"):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL;")
@@ -45,7 +45,8 @@ def init_db(db_name="X-OUTPUT.db"):
     conn.commit()
     conn.close()
 
-PREFIXES = ['2X', '6V', 'NV', 'KX', '8X', '4U', '8U', 'HV', 'SV', '8V', 'GX', '7U', '7X', 'VX', '4V', 'MX', 'QV', 'ZV', 'NU', 'VU', 'XX', 'EV', 'RU', 'BX']
+
+PREFIXES = ['K6', 'ZH', 'ZM', 'TN', '9V', 'PL',]
 
 USER_AGENTS = [
     # Desktop browsers
@@ -60,12 +61,12 @@ USER_AGENTS = [
 
 SUFFIX_CHARS = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', "H", 'J', 'K', 'L',
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L',
     'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W',
     'X', 'Y', 'Z'
 ]
 
-MAX_PARALLEL_PREFIXES = 1  # start with 2–4
+MAX_PARALLEL_PREFIXES = 2  # start with 2–4
 
 PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
@@ -81,20 +82,23 @@ def save_failed_code(worker_id, code, reason):
 async def fetch_code(local_code, client, session_id):
     payload = {
         "Guid": local_code,
-        "Lng": "fr",
-        "partner": "55"
+        "Lng": "en",
+        "partner": "1"
     }
 
     url = "https://1xbet.cm/service-api/LiveBet/Open/GetCoupon"
 
-    headers={
+    headers = {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "fr-CM,fr;q=0.9",
-        "Referer": "https://www.1xbet.cm/",
-        "Origin": "https://www.1xbet.cm",
+        "Accept-Language": "en-CA,en;q=0.9",
         "Connection": "keep-alive",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": "https://ca.1xbet.com/en",
+        "Origin": "https://ca.1xbet.com",
     }
+
     resp = await client.post(url, headers=headers, json=payload)
 
     content_type = resp.headers.get("Content-Type", "")
@@ -285,11 +289,12 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
                     return "NEED_CLIENT_RESET"
 
                 if result == "ERROR_RETRY":
+                    await asyncio.sleep(random.uniform(1, 3))
                     continue
 
                 break
 
-            await asyncio.sleep(random.uniform(2, 4))
+            await asyncio.sleep(random.uniform(26, 45))
 
             if counting_enabled:
                 if result == "INVALID":
@@ -314,18 +319,17 @@ async def process_prefix(prefix):
 
             # 🔑 NEW CLIENT = NEW TLS HANDSHAKE
             async with httpx.AsyncClient(
-                    http2=False,
-                    timeout=httpx.Timeout(50.0, connect=25.0),
+                    timeout=httpx.Timeout(50.0, connect=50.0),
                     limits=httpx.Limits(
-                        max_connections=20,
-                        max_keepalive_connections=20
+                        max_connections=68,
+                        max_keepalive_connections=68
                     ),
                     headers={
                         "User-Agent": random.choice(USER_AGENTS),
                         "Accept": "application/json, text/plain, */*",
-                        "Accept-Language": "fr-CM,fr;q=0.9",
-                        "Referer": "https://www.1xbet.cm/",
-                        "Origin": "https://www.1xbet.cm",
+                        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+                        "Referer": "https://ca.1xbet.com/en",
+                        "Origin": "https://ca.1xbet.com",
                         "Connection": "keep-alive",
                     }
             ) as client:
@@ -381,7 +385,7 @@ async def process_prefix(prefix):
         print(f"🏁 PREFIX {prefix} COMPLETED\n")
 
 
-def log_code(label, code, worker_id, teams, events, score, time,odds,total_odds,last_change,db_name="X-OUTPUT.db"):
+def log_code(label, code, worker_id, teams, events, score, time, odds, total_odds, last_change, db_name="OUTPUT.db"):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     cursor.execute(
@@ -419,7 +423,7 @@ def log_code(label, code, worker_id, teams, events, score, time,odds,total_odds,
     print(f"[Worker {worker_id}] => {label}: {code} ({teams})")
 
 
-def send_db_via_gmail(sender_email, app_password, recipient_email, db_path="X-OUTPUT.db"):
+def send_db_via_gmail(sender_email, app_password, recipient_email, db_path="OUTPUT.db"):
     db_file = Path(db_path)
 
     if not db_file.exists():
@@ -427,7 +431,7 @@ def send_db_via_gmail(sender_email, app_password, recipient_email, db_path="X-OU
         return
 
     msg = EmailMessage()
-    msg["Subject"] = "1XBET Script Output DB"
+    msg["Subject"] = "SportyBet Script Output DB"
     msg["From"] = sender_email
     msg["To"] = recipient_email
     msg.set_content("Attached is the OUTPUT.db generated by the script.")
@@ -492,10 +496,9 @@ def main():
             gmail_sender,
             gmail_app_password,
             gmail_receiver,
-            "X-OUTPUT.db"
+            "OUTPUT.db"
         )
 
 
 if __name__ == "__main__":
     main()
-
