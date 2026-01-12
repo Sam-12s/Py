@@ -310,7 +310,7 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
 
-
+proxy = "http://146.19.9.236:80"
 async def process_prefix(prefix):
     async with PREFIX_SEMAPHORE:
         print(f"\n🔐 STARTING PREFIX {prefix}")
@@ -319,6 +319,7 @@ async def process_prefix(prefix):
 
             # 🔑 NEW CLIENT = NEW TLS HANDSHAKE
             async with httpx.AsyncClient(
+                    proxies=proxy,
                     timeout=httpx.Timeout(50.0, connect=50.0),
                     limits=httpx.Limits(
                         max_connections=68,
