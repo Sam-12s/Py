@@ -370,8 +370,8 @@ async def process_prefix(prefix):
                     http2=False,
                     timeout=httpx.Timeout(200.0, connect=50.0),
                     limits=httpx.Limits(
-                        max_connections=68,
-                        max_keepalive_connections=68
+                        max_connections=34,
+                        max_keepalive_connections=34
                     ),
                     headers={
                         "User-Agent": random.choice(USER_AGENTS),
