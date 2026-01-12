@@ -15,7 +15,7 @@ START_TIME = datetime.now()
 END_TIME = START_TIME + timedelta(minutes=MAX_RUNTIME_MINUTES)
 
 STOP_EVENT = asyncio.Event()
-MAX_INITIAL_INVALID = 50
+MAX_INITIAL_INVALID = 40
 
 
 def init_db(db_name="X-OUTPUT.db"):
@@ -45,7 +45,7 @@ def init_db(db_name="X-OUTPUT.db"):
     conn.commit()
     conn.close()
 
-PREFIXES = ['TU', '2X', '6V', 'NV','7U', '7X', 'VX', '4V', 'MX', 'QV', 'ZV', 'NU', 'VU', 'XX', 'EV', 'RU', 'BX']
+PREFIXES = ['TU', '2X', '6V', 'NV', 'KX', '8X', '4U', '8U', 'HV', 'SV', '8V', 'GX', '7U', '7X', 'VX', '4V', 'MX', 'QV', 'ZV', 'NU', 'VU', 'XX', 'EV', 'RU', 'BX']
 
 USER_AGENTS = [
     # Desktop browsers
@@ -65,7 +65,7 @@ SUFFIX_CHARS = [
     'X', 'Y', 'Z'
 ]
 
-MAX_PARALLEL_PREFIXES = 2  # start with 2–4
+MAX_PARALLEL_PREFIXES = 3  # start with 2–4
 
 PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
@@ -79,15 +79,6 @@ def save_failed_code(worker_id, code, reason):
 
 
 async def fetch_code(local_code, client, session_id):
-    """
-    Perform the request and catch network/timeouts so exceptions don't escape to the event loop.
-    Returns one of:
-      - "ERROR_403"       -> when server returned 403
-      - "ERROR_RETRY"     -> transient network / non-200 / decode issue (worker will retry/backoff)
-      - "INVALID"         -> explicit invalid code
-      - "VALID"           -> valid-looking code (script logic)
-      - False/None/True   -> legacy returns preserved
-    """
     payload = {
         "Guid": local_code,
         "Lng": "fr",
@@ -107,26 +98,7 @@ async def fetch_code(local_code, client, session_id):
         "Origin": "https://www.sportybet.com",
     }
 
-    # Protect network call so it doesn't bubble up a httpx/httpcore exception
-    try:
-        resp = await client.post(url, headers=headers, json=payload)
-    except asyncio.CancelledError:
-        # allow proper cancellation to propagate
-        raise
-    except httpx.ConnectTimeout:
-        print(f"[{session_id}] ConnectTimeout for {local_code}")
-        return "ERROR_RETRY"
-    except httpx.ReadTimeout:
-        print(f"[{session_id}] ReadTimeout for {local_code}")
-        return "ERROR_RETRY"
-    except httpx.RequestError as e:
-        # covers other network-level errors (httpcore exceptions wrapped)
-        print(f"[{session_id}] RequestError for {local_code}: {e}")
-        return "ERROR_RETRY"
-    except Exception as e:
-        # unexpected - log and signal retry
-        print(f"[{session_id}] Unexpected error for {local_code}: {e}")
-        return "ERROR_RETRY"
+    resp = await client.post(url, headers=headers, json=payload)
 
     content_type = resp.headers.get("Content-Type", "")
     text = resp.text.strip()
@@ -142,7 +114,8 @@ async def fetch_code(local_code, client, session_id):
             response = resp.json()
         except Exception as e:
             print(f"[{session_id}] JSON decode error: {e} | Raw: {text[:200]}")
-            return "ERROR_RETRY"
+
+            return True
 
         if not response:
             print("Empty response")
@@ -253,7 +226,7 @@ async def fetch_code(local_code, client, session_id):
                     return False
 
                 if (valid, valid1, valid2,
-                    valid3 == False) and match_date == today_date and match_date1 == today_date and match_date2 == today_date and match_date3 == today_date and calculate_odds > 50.00 and types == "Foo[...]
+                    valid3 == False) and match_date == today_date and match_date1 == today_date and match_date2 == today_date and match_date3 == today_date and calculate_odds > 50.00 and types == "Football" and types1 == "Football" and types2 == "Football" and types3 == "Football":
 
                     teams1 = f"{all_events[0].get('Opp1')} vs {all_events[0]}"
 
@@ -293,68 +266,45 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
     invalid_count = 0
     counting_enabled = True
 
-    try:
-        # 🔹 split 5th char space
-        for i in range(start_index, len(SUFFIX_CHARS), step):
-            a = SUFFIX_CHARS[i]
+    # 🔹 split 5th char space
+    for i in range(start_index, len(SUFFIX_CHARS), step):
+        a = SUFFIX_CHARS[i]
 
+        if STOP_EVENT.is_set():
+            break
+
+        for b in SUFFIX_CHARS:
             if STOP_EVENT.is_set():
                 break
 
-            for b in SUFFIX_CHARS:
-                if STOP_EVENT.is_set():
-                    break
+            code = f"{prefix}{fourth_char}{a}{b}"
 
-                code = f"{prefix}{fourth_char}{a}{b}"
+            while True:
+                result = await fetch_code(code, client, worker_id)
 
-                # loop until not a transient error
-                while True:
-                    try:
-                        result = await fetch_code(code, client, worker_id)
-                    except asyncio.CancelledError:
-                        # allow cancellation to bubble up to outer scope and exit cleanly
-                        raise
-                    except Exception as e:
-                        # unexpected: log and treat as retryable
-                        print(f"[{worker_id}] Unexpected exception while fetching {code}: {e}")
-                        result = "ERROR_RETRY"
+                if result == "ERROR_403":
+                    save_failed_code(worker_id, code, "403")
+                    print(f"[{worker_id}] 🔄 403 on {code}")
+                    return "NEED_CLIENT_RESET"
 
-                    if result == "ERROR_403":
-                        save_failed_code(worker_id, code, "403")
-                        print(f"[{worker_id}] 🔄 403 on {code}")
-                        return "NEED_CLIENT_RESET"
+                if result == "ERROR_RETRY":
+                    continue
 
-                    if result == "ERROR_RETRY":
-                        # small jitter/backoff before retrying
-                        await asyncio.sleep(random.uniform(1.0, 3.0))
-                        continue
+                break
 
-                    # normal break for other statuses: INVALID, VALID, etc.
-                    break
+            await asyncio.sleep(random.uniform(2, 4))
 
-                # spacing between requests to be polite / avoid hammering
-                await asyncio.sleep(random.uniform(26, 45))
+            if counting_enabled:
+                if result == "INVALID":
+                    invalid_count += 1
+                    if invalid_count >= MAX_INITIAL_INVALID:
+                        print(f"[{worker_id}] 🛑 stopped after INVALID limit")
+                        return
 
-                if counting_enabled:
-                    if result == "INVALID":
-                        invalid_count += 1
-                        if invalid_count >= MAX_INITIAL_INVALID:
-                            print(f"[{worker_id}] 🛑 stopped after INVALID limit")
-                            return
-
-                    elif result == "VALID":
-                        counting_enabled = False
-                        invalid_count = 0
-                        print(f"[{worker_id}] 🔓 unlocked")
-
-    except asyncio.CancelledError:
-        print(f"[{prefix}] ⚠️ Worker {worker_id} cancelled")
-        # let cancellation complete silently
-        return
-    except Exception as e:
-        print(f"[{prefix}] ❗ Worker {worker_id} crashed with unexpected error: {e}")
-        # allow caller to decide whether to reset client
-        return "ERROR_RETRY"
+                elif result == "VALID":
+                    counting_enabled = False
+                    invalid_count = 0
+                    print(f"[{worker_id}] 🔓 unlocked")
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
 
@@ -370,8 +320,8 @@ async def process_prefix(prefix):
                     http2=False,
                     timeout=httpx.Timeout(200.0, connect=50.0),
                     limits=httpx.Limits(
-                        max_connections=34,
-                        max_keepalive_connections=34
+                        max_connections=68,
+                        max_keepalive_connections=68
                     ),
                     headers={
                         "User-Agent": random.choice(USER_AGENTS),
@@ -419,8 +369,7 @@ async def process_prefix(prefix):
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
                 # 🔴 CHECK IF ANY WORKER REQUESTED TLS RESET
-                # be robust: results may contain exceptions
-                if any(r == "NEED_CLIENT_RESET" for r in results):
+                if "NEED_CLIENT_RESET" in results:
                     print(f"[{prefix}] 🔄 403 DETECTED — closing client & sleeping 30s")
 
                     # client is automatically CLOSED here by context manager
@@ -428,11 +377,6 @@ async def process_prefix(prefix):
 
                     # 🔁 RESTART PREFIX WITH NEW TLS
                     continue
-
-                # If any worker returned an exception object, log it
-                for r in results:
-                    if isinstance(r, Exception):
-                        print(f"[{prefix}] Worker raised exception: {r}")
 
                 # ✅ NORMAL COMPLETION (NO 403)
                 break
@@ -547,16 +491,14 @@ def main():
         gmail_app_password = "zjti bewf hoib dteb"
         gmail_receiver = "tidianeyonkeu515@gmail.com"
 
-        try:
-            send_db_via_gmail(
-                gmail_sender,
-                gmail_app_password,
-                gmail_receiver,
-                "X-OUTPUT.db"
-            )
-        except Exception as e:
-            print(f"Failed to send DB via Gmail: {e}")
+        send_db_via_gmail(
+            gmail_sender,
+            gmail_app_password,
+            gmail_receiver,
+            "X-OUTPUT.db"
+        )
 
 
 if __name__ == "__main__":
     main()
+
