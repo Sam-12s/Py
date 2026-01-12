@@ -310,7 +310,7 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
 
-proxy = "http://146.19.9.236:80"
+proxy = "http://31.57.41.172:5748"
 async def process_prefix(prefix):
     async with PREFIX_SEMAPHORE:
         print(f"\n🔐 STARTING PREFIX {prefix}")
