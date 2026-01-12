@@ -79,6 +79,15 @@ def save_failed_code(worker_id, code, reason):
 
 
 async def fetch_code(local_code, client, session_id):
+    """
+    Perform the request and catch network/timeouts so exceptions don't escape to the event loop.
+    Returns one of:
+      - "ERROR_403"       -> when server returned 403
+      - "ERROR_RETRY"     -> transient network / non-200 / decode issue (worker will retry/backoff)
+      - "INVALID"         -> explicit invalid code
+      - "VALID"           -> valid-looking code (script logic)
+      - False/None/True   -> legacy returns preserved
+    """
     payload = {
         "Guid": local_code,
         "Lng": "fr",
@@ -98,7 +107,26 @@ async def fetch_code(local_code, client, session_id):
         "Origin": "https://www.sportybet.com",
     }
 
-    resp = await client.post(url, headers=headers, json=payload)
+    # Protect network call so it doesn't bubble up a httpx/httpcore exception
+    try:
+        resp = await client.post(url, headers=headers, json=payload)
+    except asyncio.CancelledError:
+        # allow proper cancellation to propagate
+        raise
+    except httpx.ConnectTimeout:
+        print(f"[{session_id}] ConnectTimeout for {local_code}")
+        return "ERROR_RETRY"
+    except httpx.ReadTimeout:
+        print(f"[{session_id}] ReadTimeout for {local_code}")
+        return "ERROR_RETRY"
+    except httpx.RequestError as e:
+        # covers other network-level errors (httpcore exceptions wrapped)
+        print(f"[{session_id}] RequestError for {local_code}: {e}")
+        return "ERROR_RETRY"
+    except Exception as e:
+        # unexpected - log and signal retry
+        print(f"[{session_id}] Unexpected error for {local_code}: {e}")
+        return "ERROR_RETRY"
 
     content_type = resp.headers.get("Content-Type", "")
     text = resp.text.strip()
@@ -114,8 +142,7 @@ async def fetch_code(local_code, client, session_id):
             response = resp.json()
         except Exception as e:
             print(f"[{session_id}] JSON decode error: {e} | Raw: {text[:200]}")
-
-            return True
+            return "ERROR_RETRY"
 
         if not response:
             print("Empty response")
@@ -226,7 +253,7 @@ async def fetch_code(local_code, client, session_id):
                     return False
 
                 if (valid, valid1, valid2,
-                    valid3 == False) and match_date == today_date and match_date1 == today_date and match_date2 == today_date and match_date3 == today_date and calculate_odds > 50.00 and types == "Football" and types1 == "Football" and types2 == "Football" and types3 == "Football":
+                    valid3 == False) and match_date == today_date and match_date1 == today_date and match_date2 == today_date and match_date3 == today_date and calculate_odds > 50.00 and types == "Foo[...]
 
                     teams1 = f"{all_events[0].get('Opp1')} vs {all_events[0]}"
 
@@ -266,46 +293,68 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
     invalid_count = 0
     counting_enabled = True
 
-    # 🔹 split 5th char space
-    for i in range(start_index, len(SUFFIX_CHARS), step):
-        a = SUFFIX_CHARS[i]
+    try:
+        # 🔹 split 5th char space
+        for i in range(start_index, len(SUFFIX_CHARS), step):
+            a = SUFFIX_CHARS[i]
 
-        if STOP_EVENT.is_set():
-            break
-
-        for b in SUFFIX_CHARS:
             if STOP_EVENT.is_set():
                 break
 
-            code = f"{prefix}{fourth_char}{a}{b}"
+            for b in SUFFIX_CHARS:
+                if STOP_EVENT.is_set():
+                    break
 
-            while True:
-                result = await fetch_code(code, client, worker_id)
+                code = f"{prefix}{fourth_char}{a}{b}"
 
-                if result == "ERROR_403":
-                    save_failed_code(worker_id, code, "403")
-                    print(f"[{worker_id}] 🔄 403 on {code}")
-                    return "NEED_CLIENT_RESET"
+                # loop until not a transient error
+                while True:
+                    try:
+                        result = await fetch_code(code, client, worker_id)
+                    except asyncio.CancelledError:
+                        # allow cancellation to bubble up to outer scope and exit cleanly
+                        raise
+                    except Exception as e:
+                        # unexpected: log and treat as retryable
+                        print(f"[{worker_id}] Unexpected exception while fetching {code}: {e}")
+                        result = "ERROR_RETRY"
 
-                if result == "ERROR_RETRY":
-                    await asyncio.sleep(random.uniform(1, 3))
-                    continue
+                    if result == "ERROR_403":
+                        save_failed_code(worker_id, code, "403")
+                        print(f"[{worker_id}] 🔄 403 on {code}")
+                        return "NEED_CLIENT_RESET"
 
-                break
+                    if result == "ERROR_RETRY":
+                        # small jitter/backoff before retrying
+                        await asyncio.sleep(random.uniform(1.0, 3.0))
+                        continue
 
-            await asyncio.sleep(random.uniform(26, 45))
+                    # normal break for other statuses: INVALID, VALID, etc.
+                    break
 
-            if counting_enabled:
-                if result == "INVALID":
-                    invalid_count += 1
-                    if invalid_count >= MAX_INITIAL_INVALID:
-                        print(f"[{worker_id}] 🛑 stopped after INVALID limit")
-                        return
+                # spacing between requests to be polite / avoid hammering
+                await asyncio.sleep(random.uniform(26, 45))
 
-                elif result == "VALID":
-                    counting_enabled = False
-                    invalid_count = 0
-                    print(f"[{worker_id}] 🔓 unlocked")
+                if counting_enabled:
+                    if result == "INVALID":
+                        invalid_count += 1
+                        if invalid_count >= MAX_INITIAL_INVALID:
+                            print(f"[{worker_id}] 🛑 stopped after INVALID limit")
+                            return
+
+                    elif result == "VALID":
+                        counting_enabled = False
+                        invalid_count = 0
+                        print(f"[{worker_id}] 🔓 unlocked")
+
+    except asyncio.CancelledError:
+        print(f"[{prefix}] ⚠️ Worker {worker_id} cancelled")
+        # let cancellation complete silently
+        return
+    except Exception as e:
+        print(f"[{prefix}] ❗ Worker {worker_id} crashed with unexpected error: {e}")
+        # allow caller to decide whether to reset client
+        return "ERROR_RETRY"
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
 
@@ -370,7 +419,8 @@ async def process_prefix(prefix):
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
                 # 🔴 CHECK IF ANY WORKER REQUESTED TLS RESET
-                if "NEED_CLIENT_RESET" in results:
+                # be robust: results may contain exceptions
+                if any(r == "NEED_CLIENT_RESET" for r in results):
                     print(f"[{prefix}] 🔄 403 DETECTED — closing client & sleeping 30s")
 
                     # client is automatically CLOSED here by context manager
@@ -378,6 +428,11 @@ async def process_prefix(prefix):
 
                     # 🔁 RESTART PREFIX WITH NEW TLS
                     continue
+
+                # If any worker returned an exception object, log it
+                for r in results:
+                    if isinstance(r, Exception):
+                        print(f"[{prefix}] Worker raised exception: {r}")
 
                 # ✅ NORMAL COMPLETION (NO 403)
                 break
@@ -492,14 +547,16 @@ def main():
         gmail_app_password = "zjti bewf hoib dteb"
         gmail_receiver = "tidianeyonkeu515@gmail.com"
 
-        send_db_via_gmail(
-            gmail_sender,
-            gmail_app_password,
-            gmail_receiver,
-            "X-OUTPUT.db"
-        )
+        try:
+            send_db_via_gmail(
+                gmail_sender,
+                gmail_app_password,
+                gmail_receiver,
+                "X-OUTPUT.db"
+            )
+        except Exception as e:
+            print(f"Failed to send DB via Gmail: {e}")
 
 
 if __name__ == "__main__":
     main()
-
