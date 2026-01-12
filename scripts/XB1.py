@@ -318,17 +318,17 @@ async def process_prefix(prefix):
             # 🔑 NEW CLIENT = NEW TLS HANDSHAKE
             async with httpx.AsyncClient(
                     http2=False,
-                    timeout=httpx.Timeout(200.0, connect=50.0),
+                    timeout=httpx.Timeout(50.0, connect=50.0),
                     limits=httpx.Limits(
-                        max_connections=68,
-                        max_keepalive_connections=68
+                        max_connections=20,
+                        max_keepalive_connections=20
                     ),
                     headers={
                         "User-Agent": random.choice(USER_AGENTS),
                         "Accept": "application/json, text/plain, */*",
                         "Accept-Language": "en-US,en;q=0.9",
-                        "Referer": "https://www.sportybet.com/",
-                        "Origin": "https://www.sportybet.com",
+                        "Referer": "https://www.1xbet.com/",
+                        "Origin": "https://www.1xbet.com",
                         "Connection": "keep-alive",
                     }
             ) as client:
