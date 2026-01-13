@@ -319,7 +319,6 @@ async def process_prefix(prefix):
 
             # 🔑 NEW CLIENT = NEW TLS HANDSHAKE
             async with httpx.AsyncClient(
-                    proxy=proxy,
                     timeout=httpx.Timeout(50.0, connect=50.0),
                     limits=httpx.Limits(
                         max_connections=68,
