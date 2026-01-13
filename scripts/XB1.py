@@ -310,7 +310,7 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
 
-proxy = "http://31.57.41.172:5748"
+proxy = "https://172.237.73.24:80"
 async def process_prefix(prefix):
     async with PREFIX_SEMAPHORE:
         print(f"\n🔐 STARTING PREFIX {prefix}")
@@ -368,7 +368,7 @@ async def process_prefix(prefix):
                     )
 
                 # 🧠 WAIT FOR ALL WORKERS TO FINISH
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                results = await asyncio.gather(*tasks,)
 
                 # 🔴 CHECK IF ANY WORKER REQUESTED TLS RESET
                 if "NEED_CLIENT_RESET" in results:
@@ -381,7 +381,7 @@ async def process_prefix(prefix):
                     continue
 
                 # ✅ NORMAL COMPLETION (NO 403)
-                break
+
 
         print(f"🏁 PREFIX {prefix} COMPLETED\n")
 
