@@ -1,4 +1,5 @@
 import sys
+from httpx import ConnectTimeout, ReadTimeout, RequestError
 import httpx
 import asyncio
 import sqlite3
@@ -66,7 +67,7 @@ SUFFIX_CHARS = [
     'X', 'Y', 'Z'
 ]
 
-MAX_PARALLEL_PREFIXES = 2  # start with 2–4
+MAX_PARALLEL_PREFIXES = int(len(PREFIXES))  # start with 2–4
 
 PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
@@ -86,7 +87,7 @@ async def fetch_code(local_code, client, session_id):
         "partner": "1"
     }
 
-    url = "https://1xbet.cm/service-api/LiveBet/Open/GetCoupon"
+    url = "https://ca.1xbet.com/service-api/LiveBet/Open/GetCoupon"
 
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
@@ -99,7 +100,21 @@ async def fetch_code(local_code, client, session_id):
         "Origin": "https://ca.1xbet.com",
     }
 
-    resp = await client.post(url, headers=headers, json=payload)
+
+    try:
+        resp = await client.post(url, headers=headers, json=payload)
+
+    except ConnectTimeout:
+        print(f"[{session_id}] ⏱️ ConnectTimeout on {local_code}")
+        return "ERROR_TIMEOUT"
+
+    except ReadTimeout:
+        print(f"[{session_id}] 📥 ReadTimeout on {local_code}")
+        return "ERROR_RETRY"
+
+    except RequestError as e:
+        print(f"[{session_id}] 🌐 Network error: {e}")
+        return "ERROR_RETRY"
 
     content_type = resp.headers.get("Content-Type", "")
     text = resp.text.strip()
@@ -292,9 +307,12 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
                     await asyncio.sleep(random.uniform(1, 3))
                     continue
 
+                if result == "ERROR_TIMEOUT":
+                    await asyncio.sleep(0)  # cooldown
+                    return "NEED_CLIENT_RESET"
                 break
 
-            await asyncio.sleep(random.uniform(26, 45))
+            await asyncio.sleep(random.uniform(2, 4))
 
             if counting_enabled:
                 if result == "INVALID":
@@ -310,7 +328,6 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
 
-proxy = "https://172.237.73.24:80"
 async def process_prefix(prefix):
     async with PREFIX_SEMAPHORE:
         print(f"\n🔐 STARTING PREFIX {prefix}")
@@ -367,7 +384,8 @@ async def process_prefix(prefix):
                     )
 
                 # 🧠 WAIT FOR ALL WORKERS TO FINISH
-                results = await asyncio.gather(*tasks,)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
 
                 # 🔴 CHECK IF ANY WORKER REQUESTED TLS RESET
                 if "NEED_CLIENT_RESET" in results:
@@ -380,7 +398,7 @@ async def process_prefix(prefix):
                     continue
 
                 # ✅ NORMAL COMPLETION (NO 403)
-
+                break
 
         print(f"🏁 PREFIX {prefix} COMPLETED\n")
 
