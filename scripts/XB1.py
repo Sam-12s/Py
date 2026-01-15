@@ -9,7 +9,10 @@ from email.message import EmailMessage
 from pathlib import Path
 import random
 
-
+# ===== RPS METRICS =====
+REQUEST_COUNTER = 0
+REQUEST_COUNTER_LOCK = asyncio.Lock()
+START_TS = time.perf_counter()
 
 MAX_RUNTIME_MINUTES = 355  # ⏱️ CHANGE THIS
 START_TIME = datetime.now()
@@ -47,7 +50,7 @@ def init_db(db_name="OUTPUT.db"):
     conn.close()
 
 
-PREFIXES = ['K6', 'ZH', 'ZM', 'TN', '9V', 'PL', 'YU', 'BK', 'UR', 'JS', '9S', 'K5', '7J', '48', 'XQ', 'QY', 'GM', 'Y7', 'DR', 'EQ', 'DY', 'DN', 'E7', 'PT', 'QP']
+PREFIXES = ['3J', '4J', 'VJ', 'L4', 'N4', '7J', 'TK', 'RH', 'U4', '14', '5J', 'RK', '44', 'FK', 'MK', '1K', 'JK', 'ZH', 'R4', 'VH', 'P4', 'ZJ', 'S4', '2J', '7K']
 
 USER_AGENTS = [
     # Desktop browsers
@@ -72,6 +75,31 @@ MAX_PARALLEL_PREFIXES = int(len(PREFIXES))  # start with 2–4
 PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
 FAILED_CODES_FILE = "failed_403_codes.log"
+
+async def rps_reporter(interval=10):
+    last_count = 0
+    last_time = time.perf_counter()
+
+    while not STOP_EVENT.is_set():
+        await asyncio.sleep(interval)
+
+        async with REQUEST_COUNTER_LOCK:
+            current_count = REQUEST_COUNTER
+
+        now = time.perf_counter()
+
+        delta_requests = current_count - last_count
+        delta_time = now - last_time
+
+        rps = delta_requests / delta_time if delta_time > 0 else 0
+
+        print(
+            f"[RPS] {rps:.2f} req/s | "
+            f"Total requests: {current_count}"
+        )
+
+        last_count = current_count
+        last_time = now
 
 
 def save_failed_code(worker_id, code, reason):
@@ -103,6 +131,9 @@ async def fetch_code(local_code, client, session_id):
 
     try:
         resp = await client.post(url, headers=headers, json=payload)
+        async with REQUEST_COUNTER_LOCK:
+            global REQUEST_COUNTER
+            REQUEST_COUNTER += 1
 
     except ConnectTimeout:
         print(f"[{session_id}] ⏱️ ConnectTimeout on {local_code}")
@@ -130,7 +161,6 @@ async def fetch_code(local_code, client, session_id):
             response = resp.json()
         except Exception as e:
             print(f"[{session_id}] JSON decode error: {e} | Raw: {text[:200]}")
-
             return True
 
         if not response:
@@ -138,7 +168,7 @@ async def fetch_code(local_code, client, session_id):
             return False
 
         if not response.get("Success"):
-
+            print("The code is invalid", local_code, "-----B02", str(session_id), flush=True)
             return "INVALID"
 
         elif response.get("Success"):
@@ -277,6 +307,8 @@ async def fetch_code(local_code, client, session_id):
 
 
 async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, step):
+    print(f"[{prefix}] 🚀 Worker {worker_id} started")
+
 
     # 🔹 split 5th char space
     for i in range(start_index, len(SUFFIX_CHARS), step):
@@ -296,18 +328,17 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
 
                 if result == "ERROR_403":
                     save_failed_code(worker_id, code, "403")
+                    print(f"[{worker_id}] 🔄 403 on {code}")
                     return "NEED_CLIENT_RESET"
 
                 if result == "ERROR_RETRY":
                     continue
 
-                if result == "ERROR_TIMEOUT":
-                    await asyncio.sleep(0)  # cooldown
-                    return "NEED_CLIENT_RESET"
                 break
 
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
+
 
 async def process_prefix(prefix):
     async with PREFIX_SEMAPHORE:
@@ -317,7 +348,8 @@ async def process_prefix(prefix):
 
             # 🔑 NEW CLIENT = NEW TLS HANDSHAKE
             async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(50.0, connect=50.0),
+                    http2=False,
+                    timeout=httpx.Timeout(200.0, connect=50.0),
                     limits=httpx.Limits(
                         max_connections=68,
                         max_keepalive_connections=68
@@ -325,9 +357,9 @@ async def process_prefix(prefix):
                     headers={
                         "User-Agent": random.choice(USER_AGENTS),
                         "Accept": "application/json, text/plain, */*",
-                        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-                        "Referer": "https://ca.1xbet.com/en",
-                        "Origin": "https://ca.1xbet.com",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Referer": "https://www.sportybet.com/",
+                        "Origin": "https://www.sportybet.com",
                         "Connection": "keep-alive",
                     }
             ) as client:
@@ -367,16 +399,18 @@ async def process_prefix(prefix):
                 # 🧠 WAIT FOR ALL WORKERS TO FINISH
                 results = await asyncio.gather(*tasks, return_exceptions=True)
 
-
                 # 🔴 CHECK IF ANY WORKER REQUESTED TLS RESET
                 if "NEED_CLIENT_RESET" in results:
+                    print(f"[{prefix}] 🔄 403 DETECTED — closing client & sleeping 30s")
+
+                    # client is automatically CLOSED here by context manager
+                    # 🔁 RESTART PREFIX WITH NEW TLS
                     continue
 
                 # ✅ NORMAL COMPLETION (NO 403)
                 break
 
         print(f"🏁 PREFIX {prefix} COMPLETED\n")
-
 
 def log_code(label, code, worker_id, teams, events, score, time, odds, total_odds, last_change, db_name="OUTPUT.db"):
     conn = sqlite3.connect(db_name)
@@ -457,6 +491,7 @@ async def main_async():
     print("STARTING PREFIX ENGINE")
 
     watchdog_task = asyncio.create_task(runtime_watchdog())
+    rps_task = asyncio.create_task(rps_reporter(interval=15))
 
     prefix_tasks = [
         asyncio.create_task(process_prefix(prefix))
@@ -464,7 +499,7 @@ async def main_async():
     ]
 
     done, pending = await asyncio.wait(
-        prefix_tasks + [watchdog_task],
+        prefix_tasks + [watchdog_task, rps_task],
         return_when=asyncio.FIRST_COMPLETED
     )
 
