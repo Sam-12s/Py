@@ -13,6 +13,9 @@ import time
 REQUEST_COUNTER = 0
 REQUEST_COUNTER_LOCK = asyncio.Lock()
 START_TS = time.perf_counter()
+TOTAL_REQUESTS = 0
+SUCCESS_REQUESTS = 0
+RETRY_REQUESTS = 0
 
 MAX_RUNTIME_MINUTES = 355  # ⏱️ CHANGE THIS
 START_TIME = datetime.now()
@@ -76,31 +79,40 @@ PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
 FAILED_CODES_FILE = "failed_403_codes.log"
 
-async def rps_reporter(interval=10):
-    last_count = 0
+async def rps_reporter(interval=15):
+    global TOTAL_REQUESTS, SUCCESS_REQUESTS, RETRY_REQUESTS
+
+    last_total = 0
+    last_success = 0
+    last_retry = 0
     last_time = time.perf_counter()
 
     while not STOP_EVENT.is_set():
         await asyncio.sleep(interval)
 
         async with REQUEST_COUNTER_LOCK:
-            current_count = REQUEST_COUNTER
+            total = TOTAL_REQUESTS
+            success = SUCCESS_REQUESTS
+            retry = RETRY_REQUESTS
 
         now = time.perf_counter()
+        dt = now - last_time
 
-        delta_requests = current_count - last_count
-        delta_time = now - last_time
-
-        rps = delta_requests / delta_time if delta_time > 0 else 0
+        total_rps = (total - last_total) / dt if dt > 0 else 0
+        success_rps = (success - last_success) / dt if dt > 0 else 0
+        retry_rps = (retry - last_retry) / dt if dt > 0 else 0
 
         print(
-            f"[RPS] {rps:.2f} req/s | "
-            f"Total requests: {current_count}"
+            f"[RPS] total={total_rps:.1f}/s | "
+            f"success={success_rps:.1f}/s | "
+            f"retry={retry_rps:.1f}/s | "
+            f"ok={success}"
         )
 
-        last_count = current_count
+        last_total = total
+        last_success = success
+        last_retry = retry
         last_time = now
-
 
 def save_failed_code(worker_id, code, reason):
     line = f"{datetime.now().isoformat()} | {worker_id} | {code} | {reason}\n"
@@ -132,9 +144,19 @@ async def fetch_code(local_code, client, session_id):
     try:
         resp = await client.post(url, headers=headers, json=payload)
         async with REQUEST_COUNTER_LOCK:
-            global REQUEST_COUNTER
-            REQUEST_COUNTER += 1
-
+            TOTAL_REQUESTS += 1
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("Code") == 0:
+                async with REQUEST_COUNTER_LOCK:
+                    SUCCESS_REQUESTS += 1
+            else:
+                async with REQUEST_COUNTER_LOCK:
+                    RETRY_REQUESTS += 1
+        else:
+            async with REQUEST_COUNTER_LOCK:
+                RETRY_REQUESTS += 1
     except ConnectTimeout:
         print(f"[{session_id}] ⏱️ ConnectTimeout on {local_code}")
         return "ERROR_TIMEOUT"
