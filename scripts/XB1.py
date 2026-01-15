@@ -148,7 +148,7 @@ async def fetch_code(local_code, client, session_id):
             all_events = pg.get("Events", [])
 
             if number_of_event != 4:
-                print("Retry", "-----", str(session_id), flush=True)
+                print("Retry", "-----", str(session_id), local_code)
                 return "VALID"
 
 
