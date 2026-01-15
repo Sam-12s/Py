@@ -168,7 +168,6 @@ async def fetch_code(local_code, client, session_id):
             return False
 
         if not response.get("Success"):
-            print("The code is invalid", local_code, "-----B02", str(session_id), flush=True)
             return "INVALID"
 
         elif response.get("Success"):
