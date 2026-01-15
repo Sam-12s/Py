@@ -8,7 +8,7 @@ import smtplib
 from email.message import EmailMessage
 from pathlib import Path
 import random
-
+import time
 # ===== RPS METRICS =====
 REQUEST_COUNTER = 0
 REQUEST_COUNTER_LOCK = asyncio.Lock()
