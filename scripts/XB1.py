@@ -9,14 +9,14 @@ from email.message import EmailMessage
 from pathlib import Path
 import random
 
-sys.stdout.reconfigure(line_buffering=True)
+
 
 MAX_RUNTIME_MINUTES = 355  # ⏱️ CHANGE THIS
 START_TIME = datetime.now()
 END_TIME = START_TIME + timedelta(minutes=MAX_RUNTIME_MINUTES)
 
 STOP_EVENT = asyncio.Event()
-MAX_INITIAL_INVALID = 60
+
 
 
 def init_db(db_name="OUTPUT.db"):
@@ -138,7 +138,7 @@ async def fetch_code(local_code, client, session_id):
             return False
 
         if not response.get("Success"):
-            print("The code is invalid", local_code, "-----B02", str(session_id), flush=True)
+
             return "INVALID"
 
         elif response.get("Success"):
@@ -277,10 +277,6 @@ async def fetch_code(local_code, client, session_id):
 
 
 async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, step):
-    print(f"[{prefix}] 🚀 Worker {worker_id} started")
-
-    invalid_count = 0
-    counting_enabled = True
 
     # 🔹 split 5th char space
     for i in range(start_index, len(SUFFIX_CHARS), step):
@@ -300,7 +296,6 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
 
                 if result == "ERROR_403":
                     save_failed_code(worker_id, code, "403")
-                    print(f"[{worker_id}] 🔄 403 on {code}")
                     return "NEED_CLIENT_RESET"
 
                 if result == "ERROR_RETRY":
@@ -311,19 +306,6 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
                     return "NEED_CLIENT_RESET"
                 break
 
-
-
-            if counting_enabled:
-                if result == "INVALID":
-                    invalid_count += 1
-                    if invalid_count >= MAX_INITIAL_INVALID:
-                        print(f"[{worker_id}] 🛑 stopped after INVALID limit")
-                        return
-
-                elif result == "VALID":
-                    counting_enabled = False
-                    invalid_count = 0
-                    print(f"[{worker_id}] 🔓 unlocked")
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
 
@@ -388,12 +370,6 @@ async def process_prefix(prefix):
 
                 # 🔴 CHECK IF ANY WORKER REQUESTED TLS RESET
                 if "NEED_CLIENT_RESET" in results:
-                    print(f"[{prefix}] 🔄 403 DETECTED — closing client & sleeping 30s")
-
-                    # client is automatically CLOSED here by context manager
-                    await asyncio.sleep(30)
-
-                    # 🔁 RESTART PREFIX WITH NEW TLS
                     continue
 
                 # ✅ NORMAL COMPLETION (NO 403)
