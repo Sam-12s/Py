@@ -1,4 +1,3 @@
-import sys
 from httpx import ConnectTimeout, ReadTimeout, RequestError
 import httpx
 import asyncio
@@ -78,7 +77,7 @@ PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
 FAILED_CODES_FILE = "failed_403_codes.log"
 
-async def rps_reporter(interval=10):
+async def rps_reporter(interval=15):
     last_total = 0
     last_fail = 0
     last_time = time.perf_counter()
@@ -155,11 +154,11 @@ async def fetch_code(local_code, client, session_id):
     text = resp.text.strip()
 
     if resp.status_code == 403:
-        print("{resp.status_code}")
+        print(f"{resp.status_code}")
         return "ERROR_403"
 
     if resp.status_code != 200:
-        print("{resp.status_code}")
+        print(f"{resp.status_code}")
         FAILED_REQUESTS += 1
         return "ERROR_RETRY"
 
@@ -311,14 +310,12 @@ async def fetch_code(local_code, client, session_id):
         return "ERROR_RETRY"
 
 
-async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, step):
-    print(f"[{prefix}] 🚀 Worker {worker_id} started")
+async def fourth_worker(prefix, fourth_char, client, worker_id):
+    print(f"[{prefix}] 🚀 Worker {fourth_char} started")
 
 
-    # 🔹 split 5th char space
-    for i in range(start_index, len(SUFFIX_CHARS), step):
-        a = SUFFIX_CHARS[i]
 
+    for a in SUFFIX_CHARS:
         if STOP_EVENT.is_set():
             break
 
@@ -331,19 +328,24 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
             while True:
                 result = await fetch_code(code, client, worker_id)
 
+                # 🔴 CASE 1: HTTP 403 → SAVE + RESET TLS
                 if result == "ERROR_403":
                     save_failed_code(worker_id, code, "403")
-                    print(f"[{worker_id}] 🔄 403 on {code}")
+                    print(f"[{worker_id}] 🔄 403 on {code}, requesting TLS reset")
                     return "NEED_CLIENT_RESET"
 
+                # 🟡 CASE 2: Retryable error (timeout, parse, etc.)
                 if result == "ERROR_RETRY":
-                    continue
+                    await asyncio.sleep(random.uniform(1, 3))
+                    continue  # retry SAME code
 
+                # 🟢 CASE 3: Normal response (VALID / INVALID / others)
                 break
 
+        
+            # If counting is disabled → INVALIDs are ignored forever
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
-
 
 async def process_prefix(prefix):
     async with PREFIX_SEMAPHORE:
@@ -353,53 +355,29 @@ async def process_prefix(prefix):
 
             # 🔑 NEW CLIENT = NEW TLS HANDSHAKE
             async with httpx.AsyncClient(
-                    http2=False,
-                    timeout=httpx.Timeout(200.0, connect=50.0),
-                    limits=httpx.Limits(
-                        max_connections=68,
-                        max_keepalive_connections=68
-                    ),
-                    headers={
-                        "User-Agent": random.choice(USER_AGENTS),
-                        "Accept": "application/json, text/plain, */*",
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Referer": "https://www.sportybet.com/",
-                        "Origin": "https://www.sportybet.com",
-                        "Connection": "keep-alive",
-                    }
+                http2=False,
+                timeout=httpx.Timeout(200.0, connect=50.0),
+                limits=httpx.Limits(
+                    max_connections=34,
+                    max_keepalive_connections=34
+                ),
+                headers={
+                    "User-Agent": random.choice(USER_AGENTS),
+                    "Accept": "application/json, text/plain, */*",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": "https://www.sportybet.com/",
+                    "Origin": "https://www.sportybet.com",
+                    "Connection": "keep-alive",
+                }
             ) as client:
 
                 # 🚀 START ALL WORKERS FOR THIS PREFIX
-                tasks = []
-
-                for fourth in SUFFIX_CHARS:
-                    # Worker 0 → even 5th chars
-                    tasks.append(
-                        asyncio.create_task(
-                            fourth_worker(
-                                prefix,
-                                fourth,
-                                client,
-                                f"{prefix}-{fourth}-W0",
-                                start_index=0,
-                                step=2
-                            )
-                        )
+                tasks = [
+                    asyncio.create_task(
+                        fourth_worker(prefix, fourth, client, f"{prefix}-{fourth}")
                     )
-
-                    # Worker 1 → odd 5th chars
-                    tasks.append(
-                        asyncio.create_task(
-                            fourth_worker(
-                                prefix,
-                                fourth,
-                                client,
-                                f"{prefix}-{fourth}-W1",
-                                start_index=1,
-                                step=2
-                            )
-                        )
-                    )
+                    for fourth in SUFFIX_CHARS
+                ]
 
                 # 🧠 WAIT FOR ALL WORKERS TO FINISH
                 results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -409,6 +387,8 @@ async def process_prefix(prefix):
                     print(f"[{prefix}] 🔄 403 DETECTED — closing client & sleeping 30s")
 
                     # client is automatically CLOSED here by context manager
+                    await asyncio.sleep(5)
+
                     # 🔁 RESTART PREFIX WITH NEW TLS
                     continue
 
@@ -494,9 +474,8 @@ async def runtime_watchdog():
 
 async def main_async():
     print("STARTING PREFIX ENGINE")
-
-    watchdog_task = asyncio.create_task(runtime_watchdog())
     rps_task = asyncio.create_task(rps_reporter(interval=15))
+    watchdog_task = asyncio.create_task(runtime_watchdog())
 
     prefix_tasks = [
         asyncio.create_task(process_prefix(prefix))
@@ -504,7 +483,7 @@ async def main_async():
     ]
 
     done, pending = await asyncio.wait(
-        prefix_tasks + [watchdog_task, rps_task],
+        prefix_tasks + [watchdog_task,rps_task],
         return_when=asyncio.FIRST_COMPLETED
     )
 
