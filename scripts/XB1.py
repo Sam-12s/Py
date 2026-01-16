@@ -154,11 +154,9 @@ async def fetch_code(local_code, client, session_id):
     text = resp.text.strip()
 
     if resp.status_code == 403:
-        print(f"{resp.status_code}")
         return "ERROR_403"
 
     if resp.status_code != 200:
-        print(f"{resp.status_code}")
         FAILED_REQUESTS += 1
         return "ERROR_RETRY"
 
