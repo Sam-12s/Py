@@ -10,12 +10,9 @@ from pathlib import Path
 import random
 import time
 # ===== RPS METRICS =====
-REQUEST_COUNTER = 0
-REQUEST_COUNTER_LOCK = asyncio.Lock()
-START_TS = time.perf_counter()
-TOTAL_REQUESTS = 0
-SUCCESS_REQUESTS = 0
-RETRY_REQUESTS = 0
+TOTAL_REQUESTS = 0      # all requests attempted
+FAILED_REQUESTS = 0     # request failed due to timeout, exception, or non-200
+
 
 MAX_RUNTIME_MINUTES = 355  # ⏱️ CHANGE THIS
 START_TIME = datetime.now()
@@ -79,39 +76,28 @@ PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
 FAILED_CODES_FILE = "failed_403_codes.log"
 
-async def rps_reporter(interval=15):
-    global TOTAL_REQUESTS, SUCCESS_REQUESTS, RETRY_REQUESTS
-
+async def rps_reporter(interval=10):
     last_total = 0
-    last_success = 0
-    last_retry = 0
+    last_fail = 0
     last_time = time.perf_counter()
 
     while not STOP_EVENT.is_set():
         await asyncio.sleep(interval)
 
+        now = time.perf_counter()
         async with REQUEST_COUNTER_LOCK:
             total = TOTAL_REQUESTS
-            success = SUCCESS_REQUESTS
-            retry = RETRY_REQUESTS
+            fail = FAILED_REQUESTS
 
-        now = time.perf_counter()
-        dt = now - last_time
+        delta_time = now - last_time
+        total_rps = (total - last_total) / delta_time
+        fail_rps = (fail - last_fail) / delta_time
+        success_rps = total_rps - fail_rps
 
-        total_rps = (total - last_total) / dt if dt > 0 else 0
-        success_rps = (success - last_success) / dt if dt > 0 else 0
-        retry_rps = (retry - last_retry) / dt if dt > 0 else 0
-
-        print(
-            f"[RPS] total={total_rps:.1f}/s | "
-            f"success={success_rps:.1f}/s | "
-            f"retry={retry_rps:.1f}/s | "
-            f"ok={success}"
-        )
+        print(f"[RPS] total={total_rps:.2f}/s | success={success_rps:.2f}/s | failed={fail_rps:.2f}/s | total={total}")
 
         last_total = total
-        last_success = success
-        last_retry = retry
+        last_fail = fail
         last_time = now
 
 def save_failed_code(worker_id, code, reason):
@@ -121,7 +107,7 @@ def save_failed_code(worker_id, code, reason):
 
 
 async def fetch_code(local_code, client, session_id):
-    global TOTAL_REQUESTS, SUCCESS_REQUESTS, RETRY_REQUESTS
+    global TOTAL_REQUESTS,FAILED_REQUESTS
     payload = {
         "Guid": local_code,
         "Lng": "en",
@@ -148,28 +134,19 @@ async def fetch_code(local_code, client, session_id):
         async with REQUEST_COUNTER_LOCK:
             TOTAL_REQUESTS += 1
 
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("Code") == 0:
-                async with REQUEST_COUNTER_LOCK:
-                    SUCCESS_REQUESTS += 1
-            else:
-                async with REQUEST_COUNTER_LOCK:
-                    RETRY_REQUESTS += 1
-        else:
-            async with REQUEST_COUNTER_LOCK:
-                RETRY_REQUESTS += 1
-
     except ConnectTimeout:
         print(f"[{session_id}] ⏱️ ConnectTimeout on {local_code}")
+        FAILED_REQUESTS += 1
         return "ERROR_TIMEOUT"
 
     except ReadTimeout:
         print(f"[{session_id}] 📥 ReadTimeout on {local_code}")
+        FAILED_REQUESTS += 1
         return "ERROR_RETRY"
 
     except RequestError as e:
         print(f"[{session_id}] 🌐 Network error: {e}")
+        FAILED_REQUESTS += 1
         return "ERROR_RETRY"
 
     content_type = resp.headers.get("Content-Type", "")
@@ -179,6 +156,7 @@ async def fetch_code(local_code, client, session_id):
         return "ERROR_403"
 
     if resp.status_code != 200:
+        FAILED_REQUESTS += 1
         return "ERROR_RETRY"
 
     if content_type.startswith("application/json"):
@@ -193,7 +171,7 @@ async def fetch_code(local_code, client, session_id):
             return False
 
         if not response.get("Success"):
-            print("The code is invalid", local_code, "-----B02", str(session_id), flush=True)
+            
             return "INVALID"
 
         elif response.get("Success"):
@@ -203,7 +181,7 @@ async def fetch_code(local_code, client, session_id):
             all_events = pg.get("Events", [])
 
             if number_of_event != 4:
-                print("Retry", "-----", str(session_id), local_code)
+                
                 return "VALID"
 
 
@@ -437,7 +415,7 @@ async def process_prefix(prefix):
 
         print(f"🏁 PREFIX {prefix} COMPLETED\n")
 
-def log_code(label, code, worker_id, teams, events, score, time, odds, total_odds, last_change, db_name="OUTPUT.db"):
+def log_code(label, code, worker_id, teams, events, score, times, odds, total_odds, last_change, db_name="OUTPUT.db"):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     cursor.execute(
@@ -463,7 +441,7 @@ def log_code(label, code, worker_id, teams, events, score, time, odds, total_odd
             str(teams),
             str(events),
             str(score),
-            str(time),
+            str(times),
             str(odds),
             str(total_odds),
             str(last_change),
