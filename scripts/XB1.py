@@ -8,7 +8,7 @@ import smtplib
 from email.message import EmailMessage
 from pathlib import Path
 import random
-import time
+
 # ===== RPS METRICS =====
 REQUEST_COUNTER = 0
 REQUEST_COUNTER_LOCK = asyncio.Lock()
@@ -121,6 +121,7 @@ def save_failed_code(worker_id, code, reason):
 
 
 async def fetch_code(local_code, client, session_id):
+    global TOTAL_REQUESTS, SUCCESS_REQUESTS, RETRY_REQUESTS
     payload = {
         "Guid": local_code,
         "Lng": "en",
@@ -143,9 +144,10 @@ async def fetch_code(local_code, client, session_id):
 
     try:
         resp = await client.post(url, headers=headers, json=payload)
+
         async with REQUEST_COUNTER_LOCK:
             TOTAL_REQUESTS += 1
-        
+
         if resp.status_code == 200:
             data = resp.json()
             if data.get("Code") == 0:
@@ -157,6 +159,7 @@ async def fetch_code(local_code, client, session_id):
         else:
             async with REQUEST_COUNTER_LOCK:
                 RETRY_REQUESTS += 1
+
     except ConnectTimeout:
         print(f"[{session_id}] ⏱️ ConnectTimeout on {local_code}")
         return "ERROR_TIMEOUT"
@@ -190,6 +193,7 @@ async def fetch_code(local_code, client, session_id):
             return False
 
         if not response.get("Success"):
+            print("The code is invalid", local_code, "-----B02", str(session_id), flush=True)
             return "INVALID"
 
         elif response.get("Success"):
