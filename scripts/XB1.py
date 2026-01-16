@@ -12,7 +12,9 @@ import time
 # ===== RPS METRICS =====
 TOTAL_REQUESTS = 0      # all requests attempted
 FAILED_REQUESTS = 0     # request failed due to timeout, exception, or non-200
-
+REQUEST_COUNTER = 0
+REQUEST_COUNTER_LOCK = asyncio.Lock()
+START_TS = time.perf_counter()
 
 MAX_RUNTIME_MINUTES = 355  # ⏱️ CHANGE THIS
 START_TIME = datetime.now()
@@ -171,7 +173,6 @@ async def fetch_code(local_code, client, session_id):
             return False
 
         if not response.get("Success"):
-            
             return "INVALID"
 
         elif response.get("Success"):
@@ -181,7 +182,6 @@ async def fetch_code(local_code, client, session_id):
             all_events = pg.get("Events", [])
 
             if number_of_event != 4:
-                
                 return "VALID"
 
 
