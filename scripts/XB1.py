@@ -481,7 +481,7 @@ async def main_async():
     ]
 
     done, pending = await asyncio.wait(
-        prefix_tasks + [watchdog_task,rps_task],
+        prefix_tasks + [watchdog_task],
         return_when=asyncio.FIRST_COMPLETED
     )
 
