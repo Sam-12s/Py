@@ -200,7 +200,7 @@ func fetchCode(job Job, db *sql.DB, workerID string) (result string) {
 	// ---------------- SEND REQUEST ----------------
 	resp, err := job.Client.Do(req)
 	TOTAL_REQUESTS.Add(1)
-	fmt.Println("Resp:", resp)
+	
 	
 
 	if err != nil || resp == nil {
@@ -417,7 +417,7 @@ func processPrefix(prefix string, db *sql.DB, workerID string) {
 				res := fourthWorker(
 					prefix,
 					f,
-					&client,
+					client,
 					db,
 					fmt.Sprintf("%s-%s", workerID, f),
 				)
@@ -526,7 +526,7 @@ func sendDBViaGmail(dbPath string) {
 func fourthWorker(
 	prefix string,
 	fourth string,
-	client **http.Client,
+	client *http.Client,
 	db *sql.DB,
 	workerID string,
 ) string {
@@ -546,7 +546,7 @@ func fourthWorker(
 				}
 
 				res := fetchCode(
-					Job{Code: code, Client: *client},
+					Job{Code: code, Client: client},
 					db,
 					workerID,
 				)
