@@ -170,12 +170,13 @@ func fetchCode(job Job, db *sql.DB, workerID string) string {
 	success, ok := data["Success"].(bool)
 	if !ok || !success {
 		SUCCESSFUL_REQUESTS.Add(1)
+		fmt.Println("INVALID",job.Code)
 		return "INVALID"
 	}
 
 	// server accepted
 	SUCCESSFUL_REQUESTS.Add(1)
-
+	fmt.Println("VALID",job.Code)
 	// -------- value / events --------
 	value, ok := data["Value"].(map[string]any)
 	if !ok {
@@ -315,7 +316,7 @@ func processPrefix(prefix string, db *sql.DB, workerID string) {
 		}
 
 		client := newClient()
-		fmt.Println("🔑 New client for prefix", prefix)
+		
 
 		var wg sync.WaitGroup
 		resultChan := make(chan string, len(SUFFIX))
