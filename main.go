@@ -162,8 +162,16 @@ type Job struct {
 
 // ================= REQUEST =================
 
-func fetchCode(job Job, db *sql.DB, workerID string) string {
-	// -------- request --------
+func fetchCode(job Job, db *sql.DB, workerID string) (result string) {
+	// ---------------- SAFETY NET ----------------
+	defer func() {
+		if r := recover(); r != nil {
+			FAILED_REQUESTS.Add(1)
+			result = "RETRY"
+		}
+	}()
+
+	// ---------------- BUILD PAYLOAD ----------------
 	payload := map[string]any{
 		"Guid":    job.Code,
 		"Lng":     "en",
@@ -189,67 +197,79 @@ func fetchCode(job Job, db *sql.DB, workerID string) string {
 	req.Header.Set("Referer", "https://ca.1xbet.com/en")
 	req.Header.Set("User-Agent", USER_AGENTS[rand.Intn(len(USER_AGENTS))])
 
+	// ---------------- SEND REQUEST ----------------
 	resp, err := job.Client.Do(req)
-	fmt.Println("STATUS:", resp.StatusCode)
 	TOTAL_REQUESTS.Add(1)
 
-	if err != nil {
+	if err != nil || resp == nil {
 		FAILED_REQUESTS.Add(1)
 		return "RETRY"
 	}
 	defer resp.Body.Close()
 
-	// -------- status handling --------
+	// ---------------- STATUS HANDLING ----------------
 	if resp.StatusCode == 403 {
 		FAILED_REQUESTS.Add(1)
 		return "RESET"
 	}
+
 	if resp.StatusCode != 200 {
 		FAILED_REQUESTS.Add(1)
 		return "RETRY"
 	}
 
-	// -------- decode --------
+	// ---------------- DECODE JSON ----------------
 	var data map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	dec := json.NewDecoder(resp.Body)
+	dec.UseNumber()
+
+	if err := dec.Decode(&data); err != nil || data == nil {
 		FAILED_REQUESTS.Add(1)
 		return "RETRY"
 	}
 
-	success, ok := data["Success"].(bool)
-	if !ok || !success {
+	// ---------------- SUCCESS FLAG ----------------
+	successVal, exists := data["Success"]
+	success, ok := successVal.(bool)
+
+	if !exists || !ok || !success {
 		SUCCESSFUL_REQUESTS.Add(1)
-		fmt.Println("INVALID",job.Code)
+		fmt.Println("INVALID", job.Code)
 		return "INVALID"
 	}
 
-	// server accepted
 	SUCCESSFUL_REQUESTS.Add(1)
-	fmt.Println("VALID",job.Code)
-	// -------- value / events --------
-	value, ok := data["Value"].(map[string]any)
-	if !ok {
-		SUCCESSFUL_REQUESTS.Add(1)
-		fmt.Println("VALID",job.Code)
+	fmt.Println("VALID", job.Code)
+
+	// ---------------- VALUE OBJECT ----------------
+	valueVal, exists := data["Value"]
+	value, ok := valueVal.(map[string]any)
+	if !exists || !ok || value == nil {
 		return "VALID"
 	}
 
-	eventsRaw, ok := value["Events"].([]any)
+	// ---------------- EVENTS ----------------
+	eventsVal, exists := value["Events"]
+	if !exists || eventsVal == nil {
+		return "VALID"
+	}
+
+	eventsRaw, ok := eventsVal.([]any)
 	if !ok || len(eventsRaw) == 0 {
 		return "VALID"
 	}
 
-	// python behavior: if not exactly 4 → VALID (no log)
+	// Python behavior: only process exactly 4 events
 	if len(eventsRaw) != 4 {
 		return "VALID"
 	}
 
-	// -------- filters --------
+	// ---------------- FILTERS ----------------
+	now := time.Now()
 	allFootball := true
 	allToday := true
 	allUnfinished := true
 	totalOdds := 1.0
-	now := time.Now()
 
 	var (
 		teamsArr  []string
@@ -261,44 +281,56 @@ func fetchCode(job Job, db *sql.DB, workerID string) string {
 
 	for _, e := range eventsRaw {
 		ev, ok := e.(map[string]any)
-		if !ok {
+		if !ok || ev == nil {
 			allFootball = false
 			break
 		}
 
-		// sport
-		if ev["SportNameEng"] != "Football" {
+		// Sport
+		if sport, _ := ev["SportNameEng"].(string); sport != "Football" {
 			allFootball = false
 		}
 
-		// date
-		start, _ := ev["Start"].(float64)
-		startTime := time.Unix(int64(start), 0)
-		if startTime.YearDay() != now.YearDay() || startTime.Year() != now.Year() {
+		// Start time
+		startNum, ok := ev["Start"].(json.Number)
+		if !ok {
+			allToday = false
+			continue
+		}
+
+		startUnix, err := startNum.Int64()
+		if err != nil {
+			allToday = false
+			continue
+		}
+
+		startTime := time.Unix(startUnix, 0)
+		if startTime.Year() != now.Year() || startTime.YearDay() != now.YearDay() {
 			allToday = false
 		}
 
-		// finish
+		// Finish flag
 		if finished, ok := ev["Finish"].(bool); ok && finished {
 			allUnfinished = false
 		}
 
-		// odds
-		if coef, ok := ev["Coef"].(float64); ok {
-			totalOdds *= coef
-			oddsArr = append(oddsArr, fmt.Sprintf("%.2f", coef))
+		// Odds
+		if coef, ok := ev["Coef"].(json.Number); ok {
+			f, err := coef.Float64()
+			if err == nil {
+				totalOdds *= f
+				oddsArr = append(oddsArr, fmt.Sprintf("%.2f", f))
+			}
 		}
 
-		// strings
-		teamsArr = append(teamsArr,
-			fmt.Sprintf("%v vs %v", ev["Opp1"], ev["Opp2"]),
-		)
+		// Strings (safe)
+		teamsArr = append(teamsArr, fmt.Sprintf("%v vs %v", ev["Opp1"], ev["Opp2"]))
 		eventsArr = append(eventsArr, fmt.Sprintf("%v", ev["GroupName"]))
 		scoreArr = append(scoreArr, fmt.Sprintf("%v", ev["MarketName"]))
 		timeArr = append(timeArr, startTime.Format("15:04"))
 	}
 
-	// -------- final condition (same as Python) --------
+	// ---------------- FINAL CONDITION ----------------
 	if allFootball && allToday && allUnfinished && totalOdds > 50.0 {
 		logCode(
 			db,
