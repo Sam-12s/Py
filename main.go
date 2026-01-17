@@ -63,11 +63,6 @@ var USER_AGENTS = []string{
 
 // ================= HTTP CLIENT =================
 func newClient() *http.Client {
-	dialer := &net.Dialer{
-		Timeout:   50 * time.Second,
-		KeepAlive: 300 * time.Second,
-	}
-
 	tr := &http.Transport{
 		DisableKeepAlives:   true, // 🔥 MOST IMPORTANT
 		MaxIdleConns:        0,
