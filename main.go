@@ -200,6 +200,7 @@ func fetchCode(job Job, db *sql.DB, workerID string) (result string) {
 	// ---------------- SEND REQUEST ----------------
 	resp, err := job.Client.Do(req)
 	TOTAL_REQUESTS.Add(1)
+	fmt.Println("Resp:", resp)
 	
 	
 
