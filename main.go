@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"net/url"
 	"time"
 	"log"
 	"io"
@@ -23,6 +24,23 @@ import (
 	
 	_ "github.com/mattn/go-sqlite3"
 )
+
+var PROXIES = []string{
+    "http://108.162.192.10:80",
+    "http://104.16.0.111:80",
+    "http://104.16.0.103:80",
+    "http://104.16.0.102:80",
+    "http://104.16.0.10:80",
+    "http://104.16.0.100:80",
+    "http://108.162.192.147:80",
+    "http://108.162.192.0:80",
+    "http://108.162.192.113:80",
+    "http://108.162.192.116:80",
+    "http://108.162.192.12:80",
+    "http://104.16.0.0:80",
+    "http://104.16.0.112:80",
+    "http://108.162.192.134:80",
+}
 
 const TARGET_URL = "https://ca.1xbet.com/service-api/LiveBet/Open/GetCoupon"
 
@@ -51,6 +69,23 @@ var (
 	FAILED_REQUESTS     atomic.Int64 // server rejected or network fail
 )
 
+var proxyIndex atomic.Uint32
+
+func startProxyRotator() {
+    ticker := time.NewTicker(1 * time.Second)
+
+    go func() {
+        for range ticker.C {
+            proxyIndex.Add(1)
+        }
+    }()
+}
+
+func getCurrentProxy() (*url.URL, error) {
+    idx := proxyIndex.Load() % uint32(len(PROXIES))
+    return url.Parse(PROXIES[idx])
+}
+
 var PREFIXES = []string{"EG", "44", "AC", "PS", "AN", "J3", "8E", "6R", "79", "LJ", "U8", "V7", "CA", "4E", "AL", "2P", "HZ", "21", "JB", "5D", "K6", "SL", "PQ", "ZF", "K2"}
 
 var SUFFIX = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"}
@@ -65,15 +100,23 @@ var USER_AGENTS = []string{
 // ================= HTTP CLIENT =================
 
 // newHTTP2Client returns an HTTP client using HTTP/2 + uTLS
-func newHTTP2Client() *http.Client {
+func newGlobalHTTP2Client() *http.Client {
     dialer := &net.Dialer{
-        Timeout:   50 * time.Second,
-        KeepAlive: 300 * time.Second,
+        Timeout:   30 * time.Second,
+        KeepAlive: 0, // 🔴 DISABLE keep-alive
     }
 
     tr := &http2.Transport{
-        AllowHTTP: false, // HTTPS only
-        DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+        AllowHTTP: false,
+
+        // 🔴 CRITICAL: disable connection reuse
+        DisableCompression: true,
+
+        Proxy: func(req *http.Request) (*url.URL, error) {
+            return currentProxy(), nil
+        },
+
+        DialTLS: func(network, addr string, _ *tls.Config) (net.Conn, error) {
             rawConn, err := dialer.Dial(network, addr)
             if err != nil {
                 return nil, err
@@ -85,15 +128,17 @@ func newHTTP2Client() *http.Client {
                 return nil, err
             }
 
-            ucfg := &utls.Config{
+            cfg := &utls.Config{
                 ServerName: host,
-                NextProtos: []string{"h2", "http/1.1"}, // advertise HTTP/2 first
+                NextProtos: []string{"h2", "http/1.1"},
             }
 
-            // Pick a random TLS fingerprint
-            uconn := utls.UClient(rawConn, ucfg, TLS_PROFILES[rand.Intn(len(TLS_PROFILES))])
+            uconn := utls.UClient(
+                rawConn,
+                cfg,
+                TLS_PROFILES[rand.Intn(len(TLS_PROFILES))],
+            )
 
-            // Perform handshake
             if err := uconn.Handshake(); err != nil {
                 rawConn.Close()
                 return nil, err
@@ -108,42 +153,6 @@ func newHTTP2Client() *http.Client {
         Timeout:   REQUEST_TIMEOUT,
     }
 }
-
-// buildRequest creates a POST request with rotated headers
-func buildRequest(code string) (*http.Request, error) {
-    payload := map[string]any{
-        "Guid":    code,
-        "Lng":     "en",
-        "partner": 1,
-    }
-
-    body, err := json.Marshal(payload)
-    if err != nil {
-        return nil, err
-    }
-
-    req, err := http.NewRequest(
-        "POST",
-        TARGET_URL,
-        bytes.NewReader(body),
-    )
-    if err != nil {
-        return nil, err
-    }
-
-    // Rotate User-Agent PER REQUEST
-    req.Header.Set("User-Agent", USER_AGENTS[rand.Intn(len(USER_AGENTS))])
-
-    // Browser-like headers
-    req.Header.Set("Accept", "application/json, text/plain, */*")
-    req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Origin", "https://ca.1xbet.com")
-    req.Header.Set("Referer", "https://ca.1xbet.com/en")
-
-    return req, nil
-}
-
 func newClient() *http.Client {
 	// Shared dialer
 
@@ -287,7 +296,7 @@ func fetchCode(job Job, db *sql.DB, workerID string) (result string) {
 	req.Header.Set("User-Agent", USER_AGENTS[rand.Intn(len(USER_AGENTS))])
 
 	// ---------------- SEND REQUEST ----------------
-	resp, err := job.Client.Do(req)
+	resp, err := GLOBAL_CLIENT.Do(req)
 	
 	
 
@@ -422,6 +431,7 @@ func fetchCode(job Job, db *sql.DB, workerID string) (result string) {
 
 	// ---------------- FINAL CONDITION ----------------
 	if allFootball && allToday && allUnfinished && totalOdds > 50.0 {
+		db := initDB()
 		logCode(
 			db,
 			"4x",
@@ -657,17 +667,18 @@ func fourthWorker(
 
 	return "DONE"
 }
-
 // ================= MAIN =================
-
+var GLOBAL_CLIENT *http.Client
 func main() {
 	log.SetOutput(io.Discard)
+	startProxyRotator()
 	// ---------------- DB ----------------
-	db := initDB()
+	
 	defer db.Close()
+	
 
 	fmt.Println("STARTING PREFIX ENGINE")
-
+	GLOBAL_CLIENT = newGlobalHTTP2Client()
 	// ---------------- WATCHDOG ----------------
 	// 5 hours 55 minutes = 355 minutes
 	go runtimeWatchdog(355 * time.Minute)
