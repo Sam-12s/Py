@@ -67,42 +67,44 @@ func newClient() *http.Client {
 	}
 
 	tr := &http.Transport{
-		MaxIdleConns:        300,
-		MaxIdleConnsPerHost: 150,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  false,
-
+		DisableKeepAlives:   true, // 🔥 MOST IMPORTANT
+		MaxIdleConns:        0,
+		MaxIdleConnsPerHost: 0,
+		IdleConnTimeout:     0,
+	
 		ForceAttemptHTTP2: false,
 		TLSNextProto:      make(map[string]func(string, *tls.Conn) http.RoundTripper),
-
+	
+		DisableCompression: false,
+	
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			rawConn, err := dialer.DialContext(ctx, network, addr)
 			if err != nil {
 				return nil, err
 			}
-
+	
 			host, _, err := net.SplitHostPort(addr)
 			if err != nil {
 				rawConn.Close()
 				return nil, err
 			}
-
+	
 			cfg := &utls.Config{
 				ServerName: host,
 				NextProtos: []string{"http/1.1"},
 			}
-
+	
 			uconn := utls.UClient(
 				rawConn,
 				cfg,
 				TLS_PROFILES[rand.Intn(len(TLS_PROFILES))],
 			)
-
+	
 			if err := uconn.Handshake(); err != nil {
 				rawConn.Close()
 				return nil, err
 			}
-
+	
 			return uconn, nil
 		},
 	}
