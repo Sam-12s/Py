@@ -19,8 +19,8 @@ import (
 const TARGET_URL = "https://ca.1xbet.com/service-api/LiveBet/Open/GetCoupon"
 
 const (
-	MAX_WORKERS      = 60
-	MAX_INFLIGHT     = 50
+	MAX_WORKERS      = 80
+	MAX_INFLIGHT     = 80
 	REQUEST_TIMEOUT = 20 * time.Second
 	BASE_BACKOFF    = 40 * time.Millisecond
 	MAX_RETRIES     = 3
@@ -254,4 +254,5 @@ func main() {
 	wg.Wait()
 	fmt.Println("DONE")
 }
+
 
