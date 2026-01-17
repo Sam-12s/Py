@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"time"
 	"log"
 	"io"
-	"golang.org/x/net/http2"
 	utls "github.com/refraction-networking/utls"
 	
 	_ "github.com/mattn/go-sqlite3"
@@ -667,7 +665,7 @@ func fourthWorker(
 	return "DONE"
 }
 // ================= MAIN =================
-var CLIENT *http.Client
+var GLOBAL_CLIENT *http.Client
 func main() {
 	log.SetOutput(io.Discard)
 	startProxyRotator()
@@ -677,7 +675,7 @@ func main() {
 	
 
 	fmt.Println("STARTING PREFIX ENGINE")
-	CLIENT = newGlobalClient()
+	GLOBAL_CLIENT = newGlobalClient()
 	// ---------------- WATCHDOG ----------------
 	// 5 hours 55 minutes = 355 minutes
 	go runtimeWatchdog(355 * time.Minute)
