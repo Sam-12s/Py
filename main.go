@@ -74,43 +74,29 @@ func newHTTP2Client() *http.Client {
     tr := &http2.Transport{
         AllowHTTP: false, // HTTPS only
         DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-            // Step 1: Raw TCP connection
             rawConn, err := dialer.Dial(network, addr)
             if err != nil {
                 return nil, err
             }
 
-            // Step 2: Get host for TLS SNI
             host, _, err := net.SplitHostPort(addr)
             if err != nil {
                 rawConn.Close()
                 return nil, err
             }
 
-            // Step 3: uTLS config
             ucfg := &utls.Config{
                 ServerName: host,
                 NextProtos: []string{"h2", "http/1.1"}, // advertise HTTP/2 first
             }
 
-            // Step 4: uTLS client
+            // Pick a random TLS fingerprint
             uconn := utls.UClient(rawConn, ucfg, TLS_PROFILES[rand.Intn(len(TLS_PROFILES))])
 
-            // Step 5: TLS handshake with retry
-            var hErr error
-            for i := 0; i < 3; i++ {
-                if err := uconn.Handshake(); err != nil {
-                    hErr = err
-                    time.Sleep(50 * time.Millisecond)
-                    continue
-                }
-                hErr = nil
-                break
-            }
-
-            if hErr != nil {
+            // Perform handshake
+            if err := uconn.Handshake(); err != nil {
                 rawConn.Close()
-                return nil, hErr
+                return nil, err
             }
 
             return uconn, nil
@@ -123,6 +109,40 @@ func newHTTP2Client() *http.Client {
     }
 }
 
+// buildRequest creates a POST request with rotated headers
+func buildRequest(code string) (*http.Request, error) {
+    payload := map[string]any{
+        "Guid":    code,
+        "Lng":     "en",
+        "partner": 1,
+    }
+
+    body, err := json.Marshal(payload)
+    if err != nil {
+        return nil, err
+    }
+
+    req, err := http.NewRequest(
+        "POST",
+        TARGET_URL,
+        bytes.NewReader(body),
+    )
+    if err != nil {
+        return nil, err
+    }
+
+    // Rotate User-Agent PER REQUEST
+    req.Header.Set("User-Agent", USER_AGENTS[rand.Intn(len(USER_AGENTS))])
+
+    // Browser-like headers
+    req.Header.Set("Accept", "application/json, text/plain, */*")
+    req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Origin", "https://ca.1xbet.com")
+    req.Header.Set("Referer", "https://ca.1xbet.com/en")
+
+    return req, nil
+}
 
 func newClient() *http.Client {
 	// Shared dialer
@@ -463,58 +483,60 @@ func logCode(db *sql.DB, label, code, workerID, teams, events, score, times, odd
 // ================= GENERATOR =================
 
 func processPrefix(prefix string, db *sql.DB, workerID string) {
-	for {
-		if STOP_FLAG.Load() {
-			return
-		}
+    for {
+        if STOP_FLAG.Load() {
+            return
+        }
 
-		client := newHTTP2Client()
-		
+        // ✅ ONE client per prefix
+        client := newHTTP2Client()
+        fmt.Println("🔐 New client created for prefix:", prefix)
 
-		var wg sync.WaitGroup
-		resultChan := make(chan string, len(SUFFIX))
+        var wg sync.WaitGroup
+        resultChan := make(chan string, len(SUFFIX))
 
-		for _, fourth := range SUFFIX {
-			wg.Add(1)
+        for _, fourth := range SUFFIX {
+            wg.Add(1)
 
-			go func(f string) {
-				defer wg.Done()
+            go func(f string) {
+                defer wg.Done()
 
-				res := fourthWorker(
-					prefix,
-					f,
-					client,
-					db,
-					fmt.Sprintf("%s-%s", workerID, f),
-				)
+                res := fourthWorker(
+                    prefix,
+                    f,
+                    client, // shared ONLY inside this prefix
+                    db,
+                    fmt.Sprintf("%s-%s", workerID, f),
+                )
 
-				resultChan <- res
-			}(fourth)
-		}
+                resultChan <- res
+            }(fourth)
+        }
 
-		// wait for all fourth workers
-		wg.Wait()
-		close(resultChan)
+        // Wait for all workers
+        wg.Wait()
+        close(resultChan)
 
-		// check results
-		needReset := false
-		for r := range resultChan {
-			if r == "RESET" {
-				needReset = true
-			}
-		}
+        // Check if TLS reset is needed
+        needReset := false
+        for r := range resultChan {
+            if r == "RESET" {
+                needReset = true
+            }
+        }
 
-		client.CloseIdleConnections()
+        // Close connections
+        client.CloseIdleConnections()
 
-		if needReset {
-			fmt.Println("🔄 403 detected — resetting TLS for prefix", prefix)
-			time.Sleep(5 * time.Second)
-			continue // restart prefix with new client
-		}
+        if needReset {
+            fmt.Println("🔄 RESET detected — recreating client for prefix:", prefix)
+            time.Sleep(3 * time.Second)
+            continue // 🔁 recreate client
+        }
 
-		// normal completion
-		return
-	}
+        // Prefix fully completed
+        return
+    }
 }
 
 // ================= RPS =================
