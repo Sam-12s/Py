@@ -7,6 +7,7 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	gopkg.in/gomail.v2 v2.0.0-20160411212932-81ebce5c23df
 	golang.org/x/net v0.38.0
+	golang.org/x/text v0.14.16
 )
 
 require (
