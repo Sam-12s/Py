@@ -14,6 +14,7 @@ import (
 	"time"
 	"strings"
 	"os"
+	"gopkg.in/gomail.v2"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -116,10 +117,6 @@ type Job struct {
 // ================= REQUEST =================
 
 func fetchCode(job Job, db *sql.DB, workerID string) string {
-	// -------- limiter --------
-	limiter <- struct{}{}
-	defer func() { <-limiter }()
-
 	// -------- request --------
 	payload := map[string]any{
 		"Guid":    job.Code,
@@ -133,7 +130,7 @@ func fetchCode(job Job, db *sql.DB, workerID string) string {
 		return "RETRY"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", TARGET_URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext("POST", TARGET_URL, bytes.NewReader(body))
 	if err != nil {
 		FAILED_REQUESTS.Add(1)
 		return "RETRY"
@@ -373,7 +370,7 @@ func processPrefix(prefix string, db *sql.DB, workerID string) {
 
 // ================= RPS =================
 
-func rpsReporter(ctx context.Context, interval time.Duration) {
+func rpsReporter( interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 
@@ -397,7 +394,6 @@ func rpsReporter(ctx context.Context, interval time.Duration) {
 			lastTotal = total
 			lastSuccess = success
 
-		case <-ctx.Done():
 			return
 		}
 	}
@@ -469,7 +465,6 @@ func fourthWorker(
 				}
 
 				res := fetchCode(
-					context.Background(),
 					Job{Code: code, Client: *client},
 					db,
 					workerID,
@@ -508,7 +503,7 @@ func main() {
 	go runtimeWatchdog(355 * time.Minute)
 
 	// ---------------- RPS REPORTER ----------------
-	go rpsReporter(context.Background(), 15*time.Second)
+	go rpsReporter(15*time.Second)
 
 	// ---------------- PREFIX WORKERS ----------------
 	var wg sync.WaitGroup
@@ -538,6 +533,7 @@ func main() {
 
 	fmt.Println("✅ PROGRAM EXITED CLEANLY")
 }
+
 
 
 
