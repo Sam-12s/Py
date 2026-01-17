@@ -27,11 +27,9 @@ jobs:
             ~/.cache/go-build
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
 
-      - name: Install dependencies
+      - name: Install dependencies (latest versions)
         run: |
-          # Explicitly fetch required modules
-          go get golang.org/x/net@v0.38.0
-          go get golang.org/x/text@v0.9.16
+          go get -u ./...
           go mod tidy
 
       - name: Run script
