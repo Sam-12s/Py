@@ -38,12 +38,7 @@ var (
 
 var PREFIXES = []string{"EG", "44", "AC", "PS", "AN", "J3", "8E", "6R", "79", "LJ", "U8", "V7", "CA", "4E", "AL", "2P", "HZ", "21", "JB", "5D", "K6", "SL", "PQ", "ZF", "K2"}
 
-var SUFFIX = []string{
-	"0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-	"A", "B", "C", "D", "E", "F", "G", "H", "J", "K",
-	"L", "M", "N", "P", "Q", "R", "S", "T", "U", "V",
-	"W", "X", "Y", "Z"
-}
+var SUFFIX = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9","A", "B", "C", "D", "E", "F", "G", "H", "J", "K","L", "M", "N", "P", "Q", "R", "S", "T", "U", "V","W", "X", "Y", "Z",}
 
 var USER_AGENTS = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
@@ -543,6 +538,7 @@ func main() {
 
 	fmt.Println("✅ PROGRAM EXITED CLEANLY")
 }
+
 
 
 
