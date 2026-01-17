@@ -64,8 +64,6 @@ var USER_AGENTS = []string{
 
 // ================= HTTP CLIENT =================
 
-const REQUEST_TIMEOUT = 200 * time.Second
-
 // newHTTP2Client returns an HTTP client using HTTP/2 + uTLS
 func newHTTP2Client() *http.Client {
     dialer := &net.Dialer{
