@@ -490,61 +490,60 @@ func logCode(db *sql.DB, label, code, workerID, teams, events, score, times, odd
 // ================= GENERATOR =================
 
 func processPrefix(prefix string, db *sql.DB, workerID string) {
-    for {
-        if STOP_FLAG.Load() {
-            return
-        }
+	for {
+		if STOP_FLAG.Load() {
+			return
+		}
 
-        // ✅ ONE client per prefix
-        client := newHTTP2Client()
-        fmt.Println("🔐 New client created for prefix:", prefix)
+		client := newGlobalClient()
+		
 
-        var wg sync.WaitGroup
-        resultChan := make(chan string, len(SUFFIX))
+		var wg sync.WaitGroup
+		resultChan := make(chan string, len(SUFFIX))
 
-        for _, fourth := range SUFFIX {
-            wg.Add(1)
+		for _, fourth := range SUFFIX {
+			wg.Add(1)
 
-            go func(f string) {
-                defer wg.Done()
+			go func(f string) {
+				defer wg.Done()
 
-                res := fourthWorker(
-                    prefix,
-                    f,
-                    client, // shared ONLY inside this prefix
-                    db,
-                    fmt.Sprintf("%s-%s", workerID, f),
-                )
+				res := fourthWorker(
+					prefix,
+					f,
+					client,
+					db,
+					fmt.Sprintf("%s-%s", workerID, f),
+				)
 
-                resultChan <- res
-            }(fourth)
-        }
+				resultChan <- res
+			}(fourth)
+		}
 
-        // Wait for all workers
-        wg.Wait()
-        close(resultChan)
+		// wait for all fourth workers
+		wg.Wait()
+		close(resultChan)
 
-        // Check if TLS reset is needed
-        needReset := false
-        for r := range resultChan {
-            if r == "RESET" {
-                needReset = true
-            }
-        }
+		// check results
+		needReset := false
+		for r := range resultChan {
+			if r == "RESET" {
+				needReset = true
+			}
+		}
 
-        // Close connections
-        client.CloseIdleConnections()
+		client.CloseIdleConnections()
 
-        if needReset {
-            fmt.Println("🔄 RESET detected — recreating client for prefix:", prefix)
-            time.Sleep(3 * time.Second)
-            continue // 🔁 recreate client
-        }
+		if needReset {
+			fmt.Println("🔄 403 detected — resetting TLS for prefix", prefix)
+			time.Sleep(5 * time.Second)
+			continue // restart prefix with new client
+		}
 
-        // Prefix fully completed
-        return
-    }
+		// normal completion
+		return
+	}
 }
+
 
 // ================= RPS =================
 
