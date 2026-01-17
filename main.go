@@ -19,7 +19,7 @@ import (
 )
 
 const TARGET_URL = "https://ca.1xbet.com/service-api/LiveBet/Open/GetCoupon"
-
+var GLOBAL_HTTP_CLIENT = newClient()
 var STOP_FLAG atomic.Bool
 
 const (
@@ -317,9 +317,6 @@ func processPrefix(prefix string, db *sql.DB, workerID string) {
 			return
 		}
 
-		client := newClient()
-		
-
 		var wg sync.WaitGroup
 		resultChan := make(chan string, len(SUFFIX))
 
@@ -329,13 +326,13 @@ func processPrefix(prefix string, db *sql.DB, workerID string) {
 			go func(f string) {
 				defer wg.Done()
 
-				res := fourthWorker(
-					prefix,
-					f,
-					&client,
-					db,
-					fmt.Sprintf("%s-%s", workerID, f),
-				)
+        res := fourthWorker(
+            prefix,
+            f,
+            GLOBAL_HTTP_CLIENT,
+            db,
+            fmt.Sprintf("%s-%s", workerID, f),
+        )
 
 				resultChan <- res
 			}(fourth)
@@ -353,7 +350,6 @@ func processPrefix(prefix string, db *sql.DB, workerID string) {
 			}
 		}
 
-		client.CloseIdleConnections()
 
 		if needReset {
 			fmt.Println("🔄 403 detected — resetting TLS for prefix", prefix)
@@ -441,7 +437,7 @@ func sendDBViaGmail(dbPath string) {
 func fourthWorker(
 	prefix string,
 	fourth string,
-	client **http.Client,
+	client *http.Client,
 	db *sql.DB,
 	workerID string,
 ) string {
@@ -461,7 +457,7 @@ func fourthWorker(
 				}
 
 				res := fetchCode(
-					Job{Code: code, Client: *client},
+					Job{Code: code, Client: client},
 					db,
 					workerID,
 				)
@@ -471,7 +467,6 @@ func fourthWorker(
 					goto NEXT_CODE
 
 				case "RETRY":
-					time.Sleep(time.Duration(rand.Intn(2)+1) * time.Second)
 
 				case "RESET":
 					// tell prefix to reset TLS
