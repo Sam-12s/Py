@@ -15,7 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-    "crypto/tls"
 	"log"
 	"io"
 	utls "github.com/refraction-networking/utls"
