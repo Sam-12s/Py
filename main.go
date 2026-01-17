@@ -2,28 +2,28 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"gopkg.in/gomail.v2"
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-	"strings"
-	"os"
-	"gopkg.in/gomail.v2"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 const TARGET_URL = "https://ca.1xbet.com/service-api/LiveBet/Open/GetCoupon"
+
 var STOP_FLAG atomic.Bool
 
 const (
-	MAX_INFLIGHT     = 80
+	MAX_INFLIGHT    = 80
 	REQUEST_TIMEOUT = 20 * time.Second
 	BASE_BACKOFF    = 40 * time.Millisecond
 	MAX_RETRIES     = 3
@@ -39,7 +39,7 @@ var (
 
 var PREFIXES = []string{"EG", "44", "AC", "PS", "AN", "J3", "8E", "6R", "79", "LJ", "U8", "V7", "CA", "4E", "AL", "2P", "HZ", "21", "JB", "5D", "K6", "SL", "PQ", "ZF", "K2"}
 
-var SUFFIX = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9","A", "B", "C", "D", "E", "F", "G", "H", "J", "K","L", "M", "N", "P", "Q", "R", "S", "T", "U", "V","W", "X", "Y", "Z",}
+var SUFFIX = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"}
 
 var USER_AGENTS = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
@@ -80,7 +80,7 @@ func initDB() *sql.DB {
 	// Set PRAGMA options for speed and safety
 	db.Exec(`PRAGMA journal_mode=WAL;`)
 	db.Exec(`PRAGMA synchronous=NORMAL;`)
-	db.Exec(`PRAGMA cache_size=-50000;`)  // ~50MB
+	db.Exec(`PRAGMA cache_size=-50000;`) // ~50MB
 	db.Exec(`PRAGMA temp_store=MEMORY;`)
 	db.Exec(`PRAGMA locking_mode=EXCLUSIVE;`)
 
@@ -105,14 +105,12 @@ func initDB() *sql.DB {
 	return db
 }
 
-
 // ================= JOB =================
 
 type Job struct {
 	Code   string
 	Client *http.Client
 }
-
 
 // ================= REQUEST =================
 
@@ -130,7 +128,7 @@ func fetchCode(job Job, db *sql.DB, workerID string) string {
 		return "RETRY"
 	}
 
-	req, err := http.NewRequestWithContext("POST", TARGET_URL, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", TARGET_URL, bytes.NewReader(body))
 	if err != nil {
 		FAILED_REQUESTS.Add(1)
 		return "RETRY"
@@ -171,7 +169,7 @@ func fetchCode(job Job, db *sql.DB, workerID string) string {
 
 	success, ok := data["Success"].(bool)
 	if !ok || !success {
-	    SUCCESSFUL_REQUESTS.Add(1)
+		SUCCESSFUL_REQUESTS.Add(1)
 		return "INVALID"
 	}
 
@@ -229,9 +227,9 @@ func fetchCode(job Job, db *sql.DB, workerID string) string {
 		}
 
 		// finish
-        if finished, ok := ev["Finish"].(bool); ok && finished {
-            allUnfinished = false
-        }
+		if finished, ok := ev["Finish"].(bool); ok && finished {
+			allUnfinished = false
+		}
 
 		// odds
 		if coef, ok := ev["Coef"].(float64); ok {
@@ -282,8 +280,6 @@ func runtimeWatchdog(maxRuntime time.Duration) {
 		time.Sleep(1 * time.Second)
 	}
 }
-
-
 
 // ================= LOG CODE FUNCTION =================
 func logCode(db *sql.DB, label, code, workerID, teams, events, score, times, odds, totalOdds, lastChange string) {
@@ -367,10 +363,9 @@ func processPrefix(prefix string, db *sql.DB, workerID string) {
 	}
 }
 
-
 // ================= RPS =================
 
-func rpsReporter( interval time.Duration) {
+func rpsReporter(interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 
@@ -430,7 +425,6 @@ func sendDBViaGmail(dbPath string) {
 
 	// Gmail SMTP (SSL)
 	d := gomail.NewDialer("smtp.gmail.com", 465, senderEmail, appPassword)
-	d.Timeout = 30 * time.Second
 
 	// Send
 	if err := d.DialAndSend(m); err != nil {
@@ -440,7 +434,6 @@ func sendDBViaGmail(dbPath string) {
 
 	fmt.Println("📧 OUTPUT.db sent successfully via Gmail.")
 }
-
 
 func fourthWorker(
 	prefix string,
@@ -503,7 +496,7 @@ func main() {
 	go runtimeWatchdog(355 * time.Minute)
 
 	// ---------------- RPS REPORTER ----------------
-	go rpsReporter(15*time.Second)
+	go rpsReporter(15 * time.Second)
 
 	// ---------------- PREFIX WORKERS ----------------
 	var wg sync.WaitGroup
@@ -529,13 +522,7 @@ func main() {
 	fmt.Println("🛑 ALL PREFIXES STOPPED")
 
 	// ---------------- EMAIL DB ----------------
-    sendDBViaGmail("OUTPUT.db")
+	sendDBViaGmail("OUTPUT.db")
 
 	fmt.Println("✅ PROGRAM EXITED CLEANLY")
 }
-
-
-
-
-
-
