@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"time"
     "crypto/tls"
+	"log"
+	"io"
 	utls "github.com/refraction-networking/utls"
 	
 	_ "github.com/mattn/go-sqlite3"
@@ -188,6 +190,7 @@ func fetchCode(job Job, db *sql.DB, workerID string) string {
 	req.Header.Set("User-Agent", USER_AGENTS[rand.Intn(len(USER_AGENTS))])
 
 	resp, err := job.Client.Do(req)
+	fmt.Println("STATUS:", resp.StatusCode)
 	TOTAL_REQUESTS.Add(1)
 
 	if err != nil {
@@ -534,6 +537,7 @@ func fourthWorker(
 // ================= MAIN =================
 
 func main() {
+	log.SetOutput(io.Discard)
 	// ---------------- DB ----------------
 	db := initDB()
 	defer db.Close()
