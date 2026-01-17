@@ -124,7 +124,7 @@ func newClient() *http.Client {
 		},
 
 
-	return &http.Client{
+	&http.Client{
 		Transport: tr,
 		Timeout:   REQUEST_TIMEOUT,
 	}
