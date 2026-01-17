@@ -268,16 +268,6 @@ func fetchCode(job Job, db *sql.DB, workerID string) (result string) {
 
 	// ---------------- SEND REQUEST ----------------
 	resp, err := job.Client.Do(req)
-	TOTAL_REQUESTS.Add(1)
-    if err != nil {
-        fmt.Println("HTTP request failed:", err)
-        FAILED_REQUESTS.Add(1)
-        return "RETRY"
-    }
-
-    defer resp.Body.Close()
-    fmt.Println("Status:", resp.StatusCode)
-
 	
 	
 
@@ -290,13 +280,11 @@ func fetchCode(job Job, db *sql.DB, workerID string) (result string) {
 	// ---------------- STATUS HANDLING ----------------
 	if resp.StatusCode == 403 {
 		FAILED_REQUESTS.Add(1)
-		fmt.Println("403 cloud-detect")
 		return "RESET"
 	}
 
 	if resp.StatusCode != 200 {
 		FAILED_REQUESTS.Add(1)
-		fmt.Println(resp.StatusCode)
 		return "RETRY"
 	}
 
