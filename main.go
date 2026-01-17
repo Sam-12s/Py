@@ -23,10 +23,10 @@ const TARGET_URL = "https://ca.1xbet.com/service-api/LiveBet/Open/GetCoupon"
 var STOP_FLAG atomic.Bool
 
 const (
-	MAX_INFLIGHT    = 80
-	REQUEST_TIMEOUT = 20 * time.Second
+	MAX_INFLIGHT    = 300
+	REQUEST_TIMEOUT = 200 * time.Second
 	BASE_BACKOFF    = 40 * time.Millisecond
-	MAX_RETRIES     = 3
+	MAX_RETRIES     = 30
 )
 
 // ================= GLOBALS =================
@@ -180,6 +180,8 @@ func fetchCode(job Job, db *sql.DB, workerID string) string {
 	// -------- value / events --------
 	value, ok := data["Value"].(map[string]any)
 	if !ok {
+		SUCCESSFUL_REQUESTS.Add(1)
+		fmt.Println("VALID",job.Code)
 		return "VALID"
 	}
 
