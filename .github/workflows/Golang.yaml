@@ -28,7 +28,11 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
 
       - name: Install dependencies
-        run: go mod download
+        run: |
+          # Explicitly fetch required modules
+          go get golang.org/x/net@v0.38.0
+          go get golang.org/x/text@v0.9.16
+          go mod tidy
 
       - name: Run script
         run: go run main.go
