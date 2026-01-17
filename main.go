@@ -72,7 +72,7 @@ func newClient() *http.Client {
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  false,
 
-		ForceAttemptHTTP2: true,
+		ForceAttemptHTTP2: false,
 		TLSNextProto:      make(map[string]func(string, *tls.Conn) http.RoundTripper),
 
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -89,6 +89,7 @@ func newClient() *http.Client {
 
 			cfg := &utls.Config{
 				ServerName: host,
+				NextProtos: []string{"http/1.1"},
 			}
 
 			uconn := utls.UClient(
