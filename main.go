@@ -79,52 +79,53 @@ func newClient() *http.Client {
 	
 		DisableCompression: false,
 	
-		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-		    dialer := &net.Dialer{
-		        Timeout:   50 * time.Second,
-		        KeepAlive: 300 * time.Second,
-		    }
-		
-		    rawConn, err := dialer.DialContext(ctx, network, addr)
-		    if err != nil {
-		        return nil, fmt.Errorf("tcp dial failed: %w", err)
-		    }
-		
-		    host, _, err := net.SplitHostPort(addr)
-		    if err != nil {
-		        rawConn.Close()
-		        return nil, fmt.Errorf("split host port failed: %w", err)
-		    }
-		
-		    cfg := &utls.Config{
-		        ServerName: host,
-		        NextProtos: []string{"http/1.1"},
-		    }
-		
-		    uconn := utls.UClient(rawConn, cfg, TLS_PROFILES[rand.Intn(len(TLS_PROFILES))])
-		
-		    // ⚡ Retry handshake 3 times
-		    var hErr error
-		    for i := 0; i < 3; i++ {
-		        if err := uconn.Handshake(); err != nil {
-		            hErr = err
-		            time.Sleep(50 * time.Millisecond)
-		            continue
-		        }
-		        hErr = nil
-		        break
-		    }
-		
-		    if hErr != nil {
-		        rawConn.Close()
-		        return nil, fmt.Errorf("tls handshake failed: %w", hErr)
-		    }
-		
-		    return uconn, nil
-		},
+        DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+            dialer := &net.Dialer{
+                Timeout:   50 * time.Second,
+                KeepAlive: 300 * time.Second,
+            }
+        
+            rawConn, err := dialer.DialContext(ctx, network, addr)
+            if err != nil {
+                return nil, fmt.Errorf("tcp dial failed: %w", err)
+            }
+        
+            host, _, err := net.SplitHostPort(addr)
+            if err != nil {
+                rawConn.Close()
+                return nil, fmt.Errorf("split host port failed: %w", err)
+            }
+        
+            cfg := &utls.Config{
+                ServerName: host,
+                NextProtos: []string{"http/1.1"},
+            }
+        
+            uconn := utls.UClient(rawConn, cfg, TLS_PROFILES[rand.Intn(len(TLS_PROFILES))])
+        
+            // ⚡ Retry handshake 3 times
+            var hErr error
+            for i := 0; i < 3; i++ {
+                if err := uconn.Handshake(); err != nil {
+                    hErr = err
+                    time.Sleep(50 * time.Millisecond)
+                    continue
+                }
+                hErr = nil
+                break
+            }
+        
+            if hErr != nil {
+                rawConn.Close()
+                return nil, fmt.Errorf("tls handshake failed: %w", hErr)
+            }
+        
+            return uconn, nil
+        },
 
+	}
 
-	&http.Client{
+	return &http.Client{
 		Transport: tr,
 		Timeout:   REQUEST_TIMEOUT,
 	}
@@ -214,11 +215,11 @@ func fetchCode(job Job, db *sql.DB, workerID string) (result string) {
 	resp, err := job.Client.Do(req)
 	TOTAL_REQUESTS.Add(1)
 	if err != nil {
-	    fmt.Println("HTTP request failed:", err)
-	    FAILED_REQUESTS.Add(1)
-	    return "RETRY"
-	}
-	fmt.Println("Status:", resp.StatusCode)
+        fmt.Println("HTTP request failed:", err)
+        FAILED_REQUESTS.Add(1)
+        return "RETRY"
+    }
+    fmt.Println("Status:", resp.StatusCode)
 
 	
 	
