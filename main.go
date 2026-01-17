@@ -72,20 +72,19 @@ var (
 var proxyIndex atomic.Uint32
 
 func startProxyRotator() {
-    ticker := time.NewTicker(1 * time.Second)
-
     go func() {
+        ticker := time.NewTicker(2 * time.Second)
         for range ticker.C {
             proxyIndex.Add(1)
         }
     }()
 }
 
-func getCurrentProxy() (*url.URL, error) {
+func currentProxy() *url.URL {
     idx := proxyIndex.Load() % uint32(len(PROXIES))
-    return url.Parse(PROXIES[idx])
+    p, _ := url.Parse(PROXIES[idx])
+    return p
 }
-
 var PREFIXES = []string{"EG", "44", "AC", "PS", "AN", "J3", "8E", "6R", "79", "LJ", "U8", "V7", "CA", "4E", "AL", "2P", "HZ", "21", "JB", "5D", "K6", "SL", "PQ", "ZF", "K2"}
 
 var SUFFIX = []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"}
@@ -100,24 +99,24 @@ var USER_AGENTS = []string{
 // ================= HTTP CLIENT =================
 
 // newHTTP2Client returns an HTTP client using HTTP/2 + uTLS
-func newGlobalHTTP2Client() *http.Client {
+func newGlobalClient() *http.Client {
     dialer := &net.Dialer{
         Timeout:   30 * time.Second,
-        KeepAlive: 0, // 🔴 DISABLE keep-alive
+        KeepAlive: 0, // 🔴 disable reuse
     }
 
-    tr := &http2.Transport{
-        AllowHTTP: false,
-
-        // 🔴 CRITICAL: disable connection reuse
-        DisableCompression: true,
+    tr := &http.Transport{
+        DisableKeepAlives: true,
+        ForceAttemptHTTP2: false, // 🔴 important
+        MaxIdleConns:      0,
+        IdleConnTimeout:  0,
 
         Proxy: func(req *http.Request) (*url.URL, error) {
             return currentProxy(), nil
         },
 
-        DialTLS: func(network, addr string, _ *tls.Config) (net.Conn, error) {
-            rawConn, err := dialer.Dial(network, addr)
+        DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+            rawConn, err := dialer.DialContext(ctx, network, addr)
             if err != nil {
                 return nil, err
             }
@@ -130,7 +129,7 @@ func newGlobalHTTP2Client() *http.Client {
 
             cfg := &utls.Config{
                 ServerName: host,
-                NextProtos: []string{"h2", "http/1.1"},
+                NextProtos: []string{"http/1.1"},
             }
 
             uconn := utls.UClient(
@@ -431,7 +430,7 @@ func fetchCode(job Job, db *sql.DB, workerID string) (result string) {
 
 	// ---------------- FINAL CONDITION ----------------
 	if allFootball && allToday && allUnfinished && totalOdds > 50.0 {
-		db := initDB()
+		
 		logCode(
 			db,
 			"4x",
@@ -668,17 +667,17 @@ func fourthWorker(
 	return "DONE"
 }
 // ================= MAIN =================
-var GLOBAL_CLIENT *http.Client
+var CLIENT *http.Client
 func main() {
 	log.SetOutput(io.Discard)
 	startProxyRotator()
 	// ---------------- DB ----------------
-	
+	db := initDB()
 	defer db.Close()
 	
 
 	fmt.Println("STARTING PREFIX ENGINE")
-	GLOBAL_CLIENT = newGlobalHTTP2Client()
+	CLIENT = newGlobalClient()
 	// ---------------- WATCHDOG ----------------
 	// 5 hours 55 minutes = 355 minutes
 	go runtimeWatchdog(355 * time.Minute)
