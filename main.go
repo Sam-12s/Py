@@ -119,68 +119,6 @@ func newHTTP2Client() *http.Client {
 }
 
 
-func newClient() *http.Client {
-	// Shared dialer
-
-	tr := &http.Transport{
-		DisableKeepAlives: false, // reuse connections for higher RPS
-		MaxIdleConns:      100,
-		MaxIdleConnsPerHost: 100,
-		IdleConnTimeout:   90 * time.Second,
-
-		ForceAttemptHTTP2: true, // allow HTTP/2 automatically
-
-		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-		    	dialer := &net.Dialer{
-                    Timeout:   50 * time.Second,
-                    KeepAlive: 300 * time.Second,
-                }
-			rawConn, err := dialer.DialContext(ctx, network, addr)
-			if err != nil {
-				return nil, fmt.Errorf("tcp dial failed: %w", err)
-			}
-
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				rawConn.Close()
-				return nil, fmt.Errorf("split host port failed: %w", err)
-			}
-
-			// ⚡ Let uTLS pick ALPN automatically
-			cfg := &utls.Config{
-				ServerName: host,
-				// NextProtos: nil  <- automatically picked by HelloID
-			}
-
-			uconn := utls.UClient(rawConn, cfg, TLS_PROFILES[rand.Intn(len(TLS_PROFILES))])
-
-			// Retry handshake 3 times in case of network/TLS glitches
-			var hErr error
-			for i := 0; i < 3; i++ {
-				if err := uconn.Handshake(); err != nil {
-					hErr = err
-					time.Sleep(50 * time.Millisecond)
-					continue
-				}
-				hErr = nil
-				break
-			}
-
-			if hErr != nil {
-				rawConn.Close()
-				return nil, fmt.Errorf("tls handshake failed: %w", hErr)
-			}
-
-			return uconn, nil
-		},
-	}
-
-	return &http.Client{
-		Transport: tr,
-		Timeout:   REQUEST_TIMEOUT,
-	}
-}
-
 // ================= DATABASE =================
 
 func initDB() *sql.DB {
