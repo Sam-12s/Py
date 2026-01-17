@@ -17,6 +17,7 @@ import (
 	"time"
 	"log"
 	"io"
+	"golang.org/x/net/http2"
 	utls "github.com/refraction-networking/utls"
 	
 	_ "github.com/mattn/go-sqlite3"
@@ -61,6 +62,63 @@ var USER_AGENTS = []string{
 }
 
 // ================= HTTP CLIENT =================
+
+func newHTTP2Client() *http.Client {
+    dialer := &net.Dialer{
+        Timeout:   50 * time.Second,
+        KeepAlive: 300 * time.Second,
+    }
+
+    // Custom http2 transport
+    tr := &http2.Transport{
+        AllowHTTP: false, // HTTPS only
+        DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
+            rawConn, err := dialer.Dial(network, addr)
+            if err != nil {
+                return nil, err
+            }
+
+            host, _, err := net.SplitHostPort(addr)
+            if err != nil {
+                rawConn.Close()
+                return nil, err
+            }
+
+            ucfg := &utls.Config{
+                ServerName: host,
+                NextProtos: []string{"h2", "http/1.1"}, // advertise HTTP/2 first
+            }
+
+            uconn := utls.UClient(rawConn, ucfg, TLS_PROFILES[rand.Intn(len(TLS_PROFILES))])
+
+            // TLS handshake retry
+            var hErr error
+            for i := 0; i < 3; i++ {
+                if err := uconn.Handshake(); err != nil {
+                    hErr = err
+                    time.Sleep(50 * time.Millisecond)
+                    continue
+                }
+                hErr = nil
+                break
+            }
+
+            if hErr != nil {
+                rawConn.Close()
+                return nil, hErr
+            }
+
+            return uconn, nil
+        },
+    }
+
+    return &http.Client{
+        Transport: tr,
+        Timeout:   REQUEST_TIMEOUT,
+    }
+}
+
+
 func newClient() *http.Client {
 	// Shared dialer
 
@@ -417,7 +475,7 @@ func processPrefix(prefix string, db *sql.DB, workerID string) {
 			return
 		}
 
-		client := newClient()
+		client := newHTTP2Client()
 		
 
 		var wg sync.WaitGroup
