@@ -338,7 +338,7 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 		return RES_RETRY, nil
 	}
 	defer resp.Body.Close()
-    fmt.Println("RESPONSE:", rsp)
+    fmt.Println("RESPONSE:", resp)
 
 	// ─── EXACT PYTHON BEHAVIOR ───
 	if resp.StatusCode == 403 {
