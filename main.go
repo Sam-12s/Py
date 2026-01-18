@@ -674,10 +674,10 @@ func fourthWorker(
 			code := fmt.Sprintf("%s%c%c%c", prefix, fourth, a, b)
 
 			var result string
-
+            var payload *LogPayload
 			// 🔁 EXACT retry loop
 			for {
-				var payload *LogPayload
+
                 result, payload = fetchCode(client, code)
 
 
