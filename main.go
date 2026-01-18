@@ -321,6 +321,7 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 		time.Now().UnixMilli(),
 	)
 	todayDate := time.Now().Local().Format("2006-01-02")
+    fmt.Println("FETCHING:", code)
 
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", USER_AGENTS[rand.Intn(len(USER_AGENTS))])
@@ -337,6 +338,7 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 		return RES_RETRY, nil
 	}
 	defer resp.Body.Close()
+    fmt.Println("RESPONSE:", rsp)
 
 	// ─── EXACT PYTHON BEHAVIOR ───
 	if resp.StatusCode == 403 {
