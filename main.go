@@ -340,9 +340,11 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 
 	// ─── EXACT PYTHON BEHAVIOR ───
 	if resp.StatusCode == 403 {
+	    fmt.Println("rsp:",resp.StatusCode)
 		return RES_403, nil
 	}
 	if resp.StatusCode != 200 {
+	    fmt.Println("rsp:",resp.StatusCode)
 		return RES_RETRY, nil
 	}
 
@@ -358,16 +360,19 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 
 	// ─── MESSAGE HANDLING ───
 	if parsed.Message == "The code is invalid." {
+	    fmt.Println("The code is invalid.",code)
 		return RES_INVALID, nil
 	}
 	if parsed.Message != "Success" {
-		return RES_INVALID, nil
+	    fmt.Println("No usable outcomes.",code)
+		return RES_VALID, nil
 	}
 
 	outcomes := parsed.Data.Outcomes
 	n := len(outcomes)
 
 	if n == 0 || n > 3 {
+	    fmt.Println("RETRY------.",code)
 		return RES_VALID, nil
 	}
 
@@ -409,7 +414,7 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 			types0 != "Simulated Reality League" &&
 			types1 != "Simulated Reality League" &&
 			types2 != "Simulated Reality League" {
-
+            fmt.Println("TRIPLE.",code)
 			payload := &LogPayload{
 				Teams: fmt.Sprintf(
 					"%s vs %s|%s vs %s|%s vs %s",
@@ -486,7 +491,7 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 			matchDate1 == todayDate &&
 			types0 != "Simulated Reality League" &&
 			types1 != "Simulated Reality League" {
-
+            fmt.Println("DOUBLE.",code)
 			totalOdds, ok := CalcOdds2(o1, o2)
 			if !ok {
 				return RES_RETRY, nil
@@ -540,7 +545,7 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 			event == "Correct Score" &&
 			matchDate == todayDate &&
 			types != "Simulated Reality League" {
-
+            fmt.Println("SINGLE.",code)
 			payload := &LogPayload{
 				Teams:      fmt.Sprintf("%s vs %s", o.HomeTeamName, o.AwayTeamName),
 				Events:     event,
