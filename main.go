@@ -714,7 +714,7 @@ func fourthWorker(
                     _ = logCode(
                         db,
                         workerID,
-                        result
+                        result,
                         code,
                         payload.Teams,
                         payload.Events,
