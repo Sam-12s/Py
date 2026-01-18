@@ -375,7 +375,10 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 	// TRIPLE
 	// ─────────────────────────────
 	if n == 3 {
-		o1, o2, o3 := outcomes[0], outcomes[1], outcomes[2]
+		o1 := &outcomes[0]
+        o2 := &outcomes[1]
+        o3 := &outcomes[2]
+
 
 		valid := o1.MatchStatusSafe()
 		matchDate0 := MatchDate(o1).Format("2006-01-02")
@@ -455,7 +458,10 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 	// DOUBLE
 	// ─────────────────────────────
 	if n == 2 {
-		o1, o2 := outcomes[0], outcomes[1]
+		o1 := &outcomes[0]
+        o2 := &outcomes[1]
+
+
 
 		valid := o1.MatchStatusSafe()
 		event0 := o1.EventDescSafe()
@@ -557,7 +563,7 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 /* =========================
    FOURTH WORKER (PY CLONE)
 ========================= */
-const (
+var (
 	SMTP_HOST = "smtp.gmail.com"
 	SMTP_PORT = "587"
 
