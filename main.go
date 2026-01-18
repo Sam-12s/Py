@@ -529,7 +529,7 @@ func fetchCode(client *http.Client, code string) (string, *LogPayload) {
 	// SINGLE
 	// ─────────────────────────────
 	if n == 1 {
-		o := outcomes[0]
+		o := &outcomes[0]
 
 		valid := o.MatchStatusSafe()
 		event := o.EventDescSafe()
@@ -714,7 +714,7 @@ func fourthWorker(
                     _ = logCode(
                         db,
                         workerID,
-                        result,
+                        result
                         code,
                         payload.Teams,
                         payload.Events,
