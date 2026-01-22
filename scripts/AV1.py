@@ -1,4 +1,3 @@
-asyncio.run(run_test())
 import asyncio
 import aiohttp
 import time
