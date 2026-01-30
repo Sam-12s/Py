@@ -156,7 +156,7 @@ func newUTLSHttpClient() *http.Client {
 
 	tr := &http.Transport{
 		DialTLSContext: dialTLS,
-		ForceAttemptHTTP2: true,
+		ForceAttemptHTTP2: false,
 		MaxIdleConns:       34,
 		MaxIdleConnsPerHost: 34,
 	}
