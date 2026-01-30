@@ -26,6 +26,8 @@ import (
 	utls "github.com/refraction-networking/utls"
 )
 const MAX_RUNTIME_MINUTES = 355 // ⏱️ CHANGE THIS
+var PREFIX_SEMAPHORE = make(chan struct{}, MAX_INFLIGHT)
+const MAX_INFLIGHT = 20
 
 var (
 	START_TIME = time.Now()
