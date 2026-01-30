@@ -1,0 +1,59 @@
+name: Build, Run & Send OUTPUT.db
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+  run-go:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2️⃣ Setup Go (with module cache)
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      # 3️⃣ Verify Go
+      - name: Verify Go installation
+        run: go version
+
+      # 4️⃣ Ensure go.mod exists
+      - name: Validate go.mod
+        run: |
+          if [ ! -f go.mod ]; then
+            echo "❌ go.mod not found"
+            exit 1
+          fi
+
+      # 5️⃣ Install dependencies (external packages)
+      - name: Install dependencies
+        run: |
+          go mod tidy
+          go mod download
+
+      # 6️⃣ Static analysis
+      - name: Go vet
+        run: go vet ./...
+
+      # 7️⃣ Build binary
+      - name: Build main.go
+        run: |
+          go build -v -o app main.go
+
+      # 8️⃣ Run program (email sent on exit via defer)
+      - name: Run program
+        env:
+          GMAIL_SENDER: ${{ secrets.GMAIL_SENDER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_RECEIVER: ${{ secrets.GMAIL_RECEIVER }}
+        run: |
+          chmod +x app
+          ./app
