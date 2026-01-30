@@ -218,12 +218,6 @@ func fetchCode(localCode string, client *http.Client, sessionID string) string {
 
 	var response map[string]any
 	if err := json.Unmarshal(raw, &response); err != nil {
-				fmt.Printf(
-			"[%s] JSON decode error: %v | Raw: %.200s\n",
-			sessionID,
-			err,
-			text,
-		)
 		return "ERROR_RETRY"
 	}
 
