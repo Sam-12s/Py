@@ -1,271 +1,56 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
-	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
-	"database/sql"
+	"net/smtp"
+	"path/filepath"
+	"fmt"
+	"log"
+	"os"
+	// SQLite driver
 	_ "github.com/mattn/go-sqlite3"
-    "bytes"
-    "encoding/base64"
-    "log"
-    "os"
-    "net/smtp"
-    "strconv"
 
+	// uTLS (will be used later for HTTP client)
 	utls "github.com/refraction-networking/utls"
 )
+const MAX_RUNTIME_MINUTES = 355 // ⏱️ CHANGE THIS
 
-/* =========================
-   CONFIG (FROM PY SCRIPT)
-========================= */
-const MAX_RUNTIME_MINUTES = 355
-var stopChan = make(chan struct{})
-var prefixSem chan struct{}
+var (
+	START_TIME = time.Now()
+	END_TIME   = START_TIME.Add(time.Duration(MAX_RUNTIME_MINUTES) * time.Minute)
+)
+var STOP_EVENT = make(chan struct{})
 
-
-
-
-var PREFIXES = []string{"L4X"}
-
-var SUFFIX_CHARS = []rune("0123456789ABCDEFGHJKLMNPQRSTUVWXYZ")
-var MAX_PREFIX_CONCURRENCY = len(PREFIXES)
-const MAX_INITIAL_INVALID = 40
-var FOURTH_CHARS = []rune("0123456789ABCDEFGHJKLMNPQRSTUVWXYZ")
-
-/* =========================
-   USER AGENTS (ROTATED)
-========================= */
-
-var USER_AGENTS = []string{
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/118.0",
-	"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
-}
-func runtimeWatchdog() {
-	endTime := time.Now().Add(time.Minute * MAX_RUNTIME_MINUTES)
-
-	for {
-		if time.Now().After(endTime) {
-			fmt.Println("⏰ MAX EXECUTION TIME REACHED — STOPPING")
-			close(stopChan) // 🔴 global stop
-			return
-		}
-		time.Sleep(1 * time.Second)
+func initDB(dbName string) {
+	if dbName == "" {
+		dbName = "OUTPUT.db"
 	}
-}
 
-/* =========================
-   SPORTYBET RESPONSE
-========================= */
-
-type SportyBetResponse struct {
-	Message string `json:"message"`
-
-	Data struct {
-		Outcomes []Outcome `json:"outcomes"`
-	} `json:"data"`
-}
-
-type Outcome struct {
-	MatchStatus string `json:"matchStatus"`
-
-	HomeTeamName string `json:"homeTeamName"`
-	AwayTeamName string `json:"awayTeamName"`
-
-	EstimateStartTime int64 `json:"estimateStartTime"`
-
-	Sport struct {
-		Category struct {
-			Name string `json:"name"`
-		} `json:"category"`
-	} `json:"sport"`
-
-	Markets []Market `json:"markets"`
-}
-
-type Market struct {
-	Desc string `json:"desc"`
-
-	LastOddsChangeTime int64 `json:"lastOddsChangeTime"`
-
-	Outcomes []MarketOutcome `json:"outcomes"`
-}
-
-type MarketOutcome struct {
-	Desc string `json:"desc"`
-	Odds string `json:"odds"`
-}
-func MatchDate(o *Outcome) time.Time {
-	if o == nil {
-		return time.Time{}
-	}
-	return time.UnixMilli(o.EstimateStartTime).Local()
-}
-
-func IsToday(o *Outcome) bool {
-	matchDate := MatchDate(o)
-	now := time.Now()
-	y1, m1, d1 := matchDate.Date()
-	y2, m2, d2 := now.Date()
-	return y1 == y2 && m1 == m2 && d1 == d2
-}
-
-func (o *Outcome) MatchStatusSafe() string {
-	if o == nil {
-		return ""
-	}
-	return o.MatchStatus
-}
-
-func (o *Outcome) CategorySafe() string {
-	if o == nil {
-		return ""
-	}
-	return o.Sport.Category.Name
-}
-
-func (o *Outcome) EventDescSafe() string {
-	m := o.Market0()
-	if m == nil {
-		return ""
-	}
-	return m.Desc
-}
-
-func (o *Outcome) OddsSafe() (float64, bool) {
-	mo := o.MarketOutcome0()
-	if mo == nil {
-		return 0, false
-	}
-	val, err := strconv.ParseFloat(mo.Odds, 64)
-	if err != nil {
-		return 0, false
-	}
-	return val, true
-}
-
-func (o *Outcome) ScoreDescSafe() string {
-	mo := o.MarketOutcome0()
-	if mo == nil {
-		return ""
-	}
-	return mo.Desc
-}
-
-func (o *Outcome) OddsChangeTimeSafe() time.Time {
-	m := o.Market0()
-	if m == nil {
-		return time.Time{}
-	}
-	return time.UnixMilli(m.LastOddsChangeTime).Local()
-}
-
-func CalcOdds2(o1, o2 *Outcome) (float64, bool) {
-	odd1, ok1 := o1.OddsSafe()
-	odd2, ok2 := o2.OddsSafe()
-	if !ok1 || !ok2 {
-		return 0, false
-	}
-	return odd1 * odd2, true
-}
-
-func CalcOdds3(o1, o2, o3 *Outcome) (float64, bool) {
-	odd1, ok1 := o1.OddsSafe()
-	odd2, ok2 := o2.OddsSafe()
-	odd3, ok3 := o3.OddsSafe()
-	if !ok1 || !ok2 || !ok3 {
-		return 0, false
-	}
-	return odd1 * odd2 * odd3, true
-}
-
-
-func IsPlayable(o *Outcome) bool {
-	status := o.MatchStatusSafe()
-	return status == "Not start" || status == "H1"
-}
-
-func IsNotSimulated(o *Outcome) bool {
-	return o.CategorySafe() != "Simulated Reality League"
-}
-
-func (o *Outcome) Market0() *Market {
-	if o == nil || len(o.Markets) == 0 {
-		return nil
-	}
-	return &o.Markets[0]
-}
-
-func (o *Outcome) MarketOutcome0() *MarketOutcome {
-	m := o.Market0()
-	if m == nil || len(m.Outcomes) == 0 {
-		return nil
-	}
-	return &m.Outcomes[0]
-}
-
-/* =========================
-   uTLS CLIENT (ANTI-BOT)
-========================= */
-
-func newSportyClient() *http.Client {
-	return &http.Client{
-		Timeout: 25 * time.Second,
-		Transport: &http.Transport{
-		    DialContext: (&net.Dialer{
-                Timeout:   50 * time.Second,
-                KeepAlive: 60 * time.Second,
-            }).DialContext,
-
-			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				raw, err := net.DialTimeout("tcp", addr, 10*time.Second)
-				if err != nil {
-					return nil, err
-				}
-
-				cfg := &utls.Config{
-				    InsecureSkipVerify: true,
-					ServerName: strings.Split(addr, ":")[0],
-					NextProtos: []string{"http/1.1"},
-				}
-
-				uconn := utls.UClient(raw, cfg, utls.HelloChrome_120)
-				if err := uconn.Handshake(); err != nil {
-					return nil, err
-				}
-				return uconn, nil
-			},
-		},
-	}
-}
-
-func initDB(dbName string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite3", dbName)
 	if err != nil {
-		return nil, err
+		log.Fatalf("DB open error: %v", err)
 	}
+	defer db.Close()
 
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL;",
 		"PRAGMA synchronous=NORMAL;",
-		"PRAGMA cache_size=-50000;",
-		"PRAGMA temp_store=MEMORY;",
+		"PRAGMA cache_size=-50000;",   // ~50MB memory
+		"PRAGMA temp_store=MEMORY;",   // faster
 		"PRAGMA locking_mode=EXCLUSIVE;",
 	}
 
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			return nil, err
+	for _, pragma := range pragmas {
+		if _, err := db.Exec(pragma); err != nil {
+			log.Fatalf("PRAGMA error (%s): %v", pragma, err)
 		}
 	}
 
@@ -283,660 +68,514 @@ func initDB(dbName string) (*sql.DB, error) {
 		Total_odds TEXT,
 		Last_change TEXT,
 		Timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-	);`
+	);
+	`
 
 	if _, err := db.Exec(createTable); err != nil {
-		return nil, err
+		log.Fatalf("Table creation error: %v", err)
+	}
+}
+
+var PREFIXES = []string{
+	"X1",
+}
+var USER_AGENTS = []string{
+	// Desktop browsers
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Firefox/118.0",
+	"Mozilla/5.0 (Windows NT 6.1; WOW64; rv:102.0) Gecko/20100101 Firefox/102.0",
+
+	// Mobile browsers
+	"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+	"Mozilla/5.0 (Linux; Android 11; Pixel 4 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Mobile Safari/537.36",
+}
+var SUFFIX_CHARS = []string{
+	"0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+	"A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L",
+	"M", "N", "P", "Q", "R", "S", "T", "U", "V", "W",
+	"X", "Y", "Z",
+}
+var MAX_PARALLEL_PREFIXES = len(PREFIXES)
+const FAILED_CODES_FILE = "failed_403_codes.log"
+var failedCodeMutex sync.Mutex
+func saveFailedCode(workerID, code, reason string) {
+	failedCodeMutex.Lock()
+	defer failedCodeMutex.Unlock()
+
+	f, err := os.OpenFile(
+		FAILED_CODES_FILE,
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+		0644,
+	)
+	if err != nil {
+		return // silent fail, same spirit as Python
+	}
+	defer f.Close()
+
+	line := fmt.Sprintf(
+		"%s | %s | %s | %s\n",
+		time.Now().Format(time.RFC3339),
+		workerID,
+		code,
+		reason,
+	)
+
+	_, _ = f.WriteString(line)
+}
+func newUTLSHttpClient() *http.Client {
+	dialTLS := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialer := &net.Dialer{
+			Timeout: 50 * time.Second,
+		}
+
+		rawConn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+
+		cfg := &utls.Config{
+			ServerName:         addr[:len(addr)-len(":443")],
+			NextProtos:         []string{"h2", "http/1.1"},
+			InsecureSkipVerify: false,
+		}
+
+		uconn := utls.UClient(rawConn, cfg, utls.HelloChrome_124)
+		if err := uconn.Handshake(); err != nil {
+			return nil, err
+		}
+
+		return uconn, nil
 	}
 
-	return db, nil
-}
-/* =========================
-   FETCH + PARSE (AV16 LOGIC)
-========================= */
+	tr := &http.Transport{
+		DialTLSContext: dialTLS,
+		ForceAttemptHTTP2: true,
+		MaxIdleConns:       34,
+		MaxIdleConnsPerHost: 34,
+	}
 
-const (
-	RES_403    = "ERROR_403"
-	RES_RETRY = "ERROR_RETRY"
-	RES_INVALID = "INVALID"
-	RES_VALID = "VALID"
-	RES_SINGLE = "SINGLE"
-	RES_DOUBLE = "DOUBLE"
-	RES_TRIPLE = "TRIPLE"
-)
-
-type LogPayload struct {
-	Teams       string
-	Events      string
-	Score       string
-	Time        string
-	Odds        string
-	TotalOdds  string
-	LastChange string
+	return &http.Client{
+		Transport: tr,
+		Timeout:   50 * time.Second,
+	}
 }
-func fetchCode(client *http.Client, code string) (string, *LogPayload) {
-	url := fmt.Sprintf(
-		"https://www.sportybet.com/api/ng/orders/share/%s?_t=%d",
-		code,
-		time.Now().UnixMilli(),
+func fetchCode(localCode string, client *http.Client, sessionID string) string {
+	payload := map[string]string{
+		"Guid":    localCode,
+		"Lng":     "en",
+		"partner": "159",
+	}
+
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest(
+		"POST",
+		"https://1xbet.ng/service-api/LiveBet/Open/GetCoupon",
+		bytes.NewBuffer(body),
 	)
-	todayDate := time.Now().Local().Format("2006-01-02")
-    fmt.Println("FETCHING:", code)
+	if err != nil {
+		return "ERROR_RETRY"
+	}
 
-	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", USER_AGENTS[rand.Intn(len(USER_AGENTS))])
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "en")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "en-CA,en;q=0.9")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
-	req.Header.Set("Referer", "https://www.sportybet.com/ng/")
-	req.Header.Set("Origin", "https://www.sportybet.com")
-	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Referer", "https://1xbet.ng/en")
+	req.Header.Set("Origin", "https://1xbet.ng")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return RES_RETRY, nil
+		return "ERROR_RETRY"
 	}
 	defer resp.Body.Close()
-    fmt.Println("RESPONSE:", resp)
 
-	// ─── EXACT PYTHON BEHAVIOR ───
 	if resp.StatusCode == 403 {
-	    fmt.Println("rsp:",resp.StatusCode)
-		return RES_403, nil
+		return "ERROR_403"
 	}
+
 	if resp.StatusCode != 200 {
-	    fmt.Println("rsp:",resp.StatusCode)
-		return RES_RETRY, nil
+		return "ERROR_RETRY"
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return RES_RETRY, nil
+	contentType := resp.Header.Get("Content-Type")
+	raw, _ := io.ReadAll(resp.Body)
+
+	if !bytes.HasPrefix([]byte(contentType), []byte("application/json")) {
+		return "ERROR_RETRY"
 	}
 
-	var parsed SportyBetResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return RES_RETRY, nil
+	var response map[string]any
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return "ERROR_RETRY"
 	}
 
-	// ─── MESSAGE HANDLING ───
-	if parsed.Message == "The code is invalid." {
-	    fmt.Println("The code is invalid.",code)
-		return RES_INVALID, nil
-	}
-	if parsed.Message != "Success" {
-	    fmt.Println("No usable outcomes.",code)
-		return RES_VALID, nil
+	success, ok := response["Success"].(bool)
+	if !ok || !success {
+		return "INVALID"
 	}
 
-	outcomes := parsed.Data.Outcomes
-	n := len(outcomes)
+	value := response["Value"].(map[string]any)
+	events := value["Events"].([]any)
 
-	if n == 0 || n > 3 {
-	    fmt.Println("RETRY------.",code)
-		return RES_VALID, nil
+	if len(events) > 15 {
+		return "VALID"
 	}
 
-	// ─────────────────────────────
-	// TRIPLE
-	// ─────────────────────────────
-	if n == 3 {
-		o1 := &outcomes[0]
-        o2 := &outcomes[1]
-        o3 := &outcomes[2]
-
-
-		valid := o1.MatchStatusSafe()
-		matchDate0 := MatchDate(o1).Format("2006-01-02")
-		matchDate1 := MatchDate(o2).Format("2006-01-02")
-		matchDate2 := MatchDate(o3).Format("2006-01-02")
-
-		types0 := o1.CategorySafe()
-		types1 := o2.CategorySafe()
-		types2 := o3.CategorySafe()
-
-		odd1, ok1 := o1.OddsSafe()
-		odd2, ok2 := o2.OddsSafe()
-		odd3, ok3 := o3.OddsSafe()
-		if !ok1 || !ok2 || !ok3 {
-			return RES_RETRY, nil
-		}
-
-		totalOdds, ok := CalcOdds3(o1, o2, o3)
-		if !ok {
-			return RES_RETRY, nil
-		}
-
-		if (valid == "Not start" || valid == "H1") &&
-			matchDate0 == todayDate &&
-			matchDate1 == todayDate &&
-			matchDate2 == todayDate &&
-			totalOdds > 15.00 &&
-			types0 != "Simulated Reality League" &&
-			types1 != "Simulated Reality League" &&
-			types2 != "Simulated Reality League" {
-            fmt.Println("TRIPLE.",code)
-			payload := &LogPayload{
-				Teams: fmt.Sprintf(
-					"%s vs %s|%s vs %s|%s vs %s",
-					o1.HomeTeamName, o1.AwayTeamName,
-					o2.HomeTeamName, o2.AwayTeamName,
-					o3.HomeTeamName, o3.AwayTeamName,
-				),
-				Events: fmt.Sprintf(
-					"%s|%s|%s",
-					o1.EventDescSafe(),
-					o2.EventDescSafe(),
-					o3.EventDescSafe(),
-				),
-				Score: fmt.Sprintf(
-					"%s|%s|%s",
-					o1.ScoreDescSafe(),
-					o2.ScoreDescSafe(),
-					o3.ScoreDescSafe(),
-				),
-				Time: fmt.Sprintf(
-					"%s||%s||%s",
-					MatchDate(o1).Format("15:04:05"),
-					MatchDate(o2).Format("15:04:05"),
-					MatchDate(o3).Format("15:04:05"),
-				),
-				Odds: fmt.Sprintf(
-					"%.2f|%.2f|%.2f",
-					odd1, odd2, odd3,
-				),
-				TotalOdds: fmt.Sprintf("%.2f", totalOdds),
-				LastChange: fmt.Sprintf(
-					"%s||%s||%s",
-					o1.OddsChangeTimeSafe().Format("15:04:05"),
-					o2.OddsChangeTimeSafe().Format("15:04:05"),
-					o3.OddsChangeTimeSafe().Format("15:04:05"),
-				),
-			}
-
-			return RES_TRIPLE, payload
-		}
-
-		return RES_VALID, nil
-	}
-
-	// ─────────────────────────────
-	// DOUBLE
-	// ─────────────────────────────
-	if n == 2 {
-		o1 := &outcomes[0]
-        o2 := &outcomes[1]
-
-
-
-		valid := o1.MatchStatusSafe()
-		event0 := o1.EventDescSafe()
-		event1 := o2.EventDescSafe()
-
-		matchDate0 := MatchDate(o1).Format("2006-01-02")
-		matchDate1 := MatchDate(o2).Format("2006-01-02")
-
-		types0 := o1.CategorySafe()
-		types1 := o2.CategorySafe()
-
-		odd1, ok1 := o1.OddsSafe()
-		odd2, ok2 := o2.OddsSafe()
-		if !ok1 || !ok2 {
-			return RES_RETRY, nil
-		}
-
-		if (valid == "Not start" || valid == "H1") &&
-			event0 == "Correct Score" &&
-			event1 == "Correct Score" &&
-			matchDate0 == todayDate &&
-			matchDate1 == todayDate &&
-			types0 != "Simulated Reality League" &&
-			types1 != "Simulated Reality League" {
-            fmt.Println("DOUBLE.",code)
-			totalOdds, ok := CalcOdds2(o1, o2)
-			if !ok {
-				return RES_RETRY, nil
-			}
-
-			payload := &LogPayload{
-				Teams: fmt.Sprintf(
-					"%s vs %s|%s vs %s",
-					o1.HomeTeamName, o1.AwayTeamName,
-					o2.HomeTeamName, o2.AwayTeamName,
-				),
-				Events: fmt.Sprintf("%s|%s", event0, event1),
-				Score:  fmt.Sprintf("%s|%s", o1.ScoreDescSafe(), o2.ScoreDescSafe()),
-				Time: fmt.Sprintf(
-					"%s||%s",
-					MatchDate(o1).Format("15:04:05"),
-					MatchDate(o2).Format("15:04:05"),
-				),
-				Odds: fmt.Sprintf("%.2f|%.2f", odd1, odd2),
-				TotalOdds: fmt.Sprintf("%.2f", totalOdds),
-				LastChange: fmt.Sprintf(
-					"%s||%s",
-					o1.OddsChangeTimeSafe().Format("15:04:05"),
-					o2.OddsChangeTimeSafe().Format("15:04:05"),
-				),
-			}
-
-			return RES_DOUBLE, payload
-		}
-
-		return RES_VALID, nil
-	}
-
-	// ─────────────────────────────
-	// SINGLE
-	// ─────────────────────────────
-	if n == 1 {
-		o := &outcomes[0]
-
-		valid := o.MatchStatusSafe()
-		event := o.EventDescSafe()
-		matchDate := MatchDate(o).Format("2006-01-02")
-		types := o.CategorySafe()
-
-		odd, ok := o.OddsSafe()
-		if !ok {
-			return RES_RETRY, nil
-		}
-
-		if (valid == "Not start" || valid == "H1") &&
-			event == "Correct Score" &&
-			matchDate == todayDate &&
-			types != "Simulated Reality League" {
-            fmt.Println("SINGLE.",code)
-			payload := &LogPayload{
-				Teams:      fmt.Sprintf("%s vs %s", o.HomeTeamName, o.AwayTeamName),
-				Events:     event,
-				Score:      o.ScoreDescSafe(),
-				Time:       MatchDate(o).Format("15:04:05"),
-				Odds:       fmt.Sprintf("%.2f", odd),
-				TotalOdds:  fmt.Sprintf("%.2f", odd),
-				LastChange: o.OddsChangeTimeSafe().Format("15:04:05"),
-			}
-
-			return RES_SINGLE, payload
-		}
-
-		return RES_VALID, nil
-	}
-
-	return RES_VALID, nil
-}
-
-/* =========================
-   FOURTH WORKER (PY CLONE)
-========================= */
-var (
-	SMTP_HOST = "smtp.gmail.com"
-	SMTP_PORT = "587"
-
-	SMTP_USER = os.Getenv("GMAIL_SENDER")
-	SMTP_PASS = os.Getenv("GMAIL_APP_PASSWORD")
-
-	EMAIL_FROM = os.Getenv("GMAIL_SENDER")
-	EMAIL_TO   = os.Getenv("GMAIL_RECEIVER")
-)
-
-func sendOutputEmail(dbPath string) error {
-	fileData, err := os.ReadFile(dbPath)
-	if err != nil {
-		return err
-	}
-
-	boundary := "SPORTYBET-BOUNDARY"
-
-	headers := map[string]string{
-		"From":         EMAIL_FROM,
-		"To":           EMAIL_TO,
-		"Subject":      "SportyBet Output",
-		"MIME-Version": "1.0",
-		"Content-Type": "multipart/mixed; boundary=" + boundary,
-	}
-
-	var msg bytes.Buffer
-
-	for k, v := range headers {
-		msg.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
-	}
-	msg.WriteString("\r\n")
-
-	// 📄 Email body
-	msg.WriteString("--" + boundary + "\r\n")
-	msg.WriteString("Content-Type: text/plain; charset=utf-8\r\n\r\n")
-	msg.WriteString("Attached is the output database.\r\n\r\n")
-
-	// 📎 Attachment
-	msg.WriteString("--" + boundary + "\r\n")
-	msg.WriteString("Content-Type: application/octet-stream\r\n")
-	msg.WriteString("Content-Disposition: attachment; filename=\"output.db\"\r\n")
-	msg.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
-
-	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(fileData)))
-	base64.StdEncoding.Encode(encoded, fileData)
-
-	// wrap base64 at 76 chars (RFC compliant)
-	for i := 0; i < len(encoded); i += 76 {
-		end := i + 76
-		if end > len(encoded) {
-			end = len(encoded)
-		}
-		msg.Write(encoded[i:end])
-		msg.WriteString("\r\n")
-	}
-
-	msg.WriteString("--" + boundary + "--")
-
-	auth := smtp.PlainAuth(
-		"",
-		SMTP_USER,
-		SMTP_PASS,
-		SMTP_HOST,
+	var (
+		eventsStatus []bool
+		matchDates   []time.Time
+		odds         []float64
+		sports       []string
+		teams        []string
+		eventNames   []string
+		scores       []string
+		matchTimes   []string
 	)
 
-	return smtp.SendMail(
-		SMTP_HOST+":"+SMTP_PORT,
-		auth,
-		EMAIL_FROM,
-		[]string{EMAIL_TO},
-		msg.Bytes(),
+	today := time.Now().Truncate(24 * time.Hour)
+
+	for _, ev := range events {
+		e := ev.(map[string]any)
+
+		eventsStatus = append(eventsStatus, e["Finish"].(bool))
+		start := time.Unix(int64(e["Start"].(float64)), 0)
+		matchDates = append(matchDates, start.Truncate(24*time.Hour))
+		matchTimes = append(matchTimes, start.Format("15:04:05"))
+
+		odd := e["Coef"].(float64)
+		odds = append(odds, odd)
+
+		sports = append(sports, e["SportNameEng"].(string))
+		eventNames = append(eventNames, e["GroupName"].(string))
+		scores = append(scores, e["MarketName"].(string))
+
+		team := e["Opp1"].(string) + " vs " + e["Opp2"].(string)
+		teams = append(teams, team)
+	}
+
+	totalOdd := odds[0]
+	for i := 1; i < len(odds); i++ {
+		totalOdd *= odds[i]
+	}
+
+	if totalOdd <= 80 || totalOdd >= 500 {
+		return "VALID"
+	}
+
+	for _, s := range sports {
+		if s != "Football" {
+			return "VALID"
+		}
+	}
+
+	for _, d := range matchDates {
+		if !d.Equal(today) {
+			return "VALID"
+		}
+	}
+
+	for _, st := range eventsStatus {
+		if st {
+			return "VALID"
+		}
+	}
+
+	initDB("OUTPUT.db")
+	logCode(
+		len(events),
+		localCode,
+		sessionID,
+		strings.Join(teams, "|"),
+		strings.Join(eventNames, "|"),
+		strings.Join(scores, "|"),
+		strings.Join(matchTimes, "|"),
+		func() string {
+			out := make([]string, len(odds))
+			for i, o := range odds {
+				out[i] = fmt.Sprintf("%f", o)
+			}
+			return strings.Join(out, "|")
+		}(),
+		fmt.Sprintf("%f", math.Round(totalOdd*100)/100),
+		"NA",
 	)
+
+	return "VALID"
 }
-
-
 func fourthWorker(
 	prefix string,
-	fourth rune,
-	startIndex int,
-	step int,
+	fourthChar string,
 	client *http.Client,
 	workerID string,
-	db *sql.DB,
-) string {
+) {
+	fmt.Printf("[%s] 🚀 Worker %s started\n", prefix, fourthChar)
 
+	for _, a := range SUFFIX_CHARS {
 
-
-	invalidCount := 0
-	countingEnabled := true
-
-	// 🔹 split 5th char space exactly like Python
-	for i := startIndex; i < len(SUFFIX_CHARS); i += step {
-        select {
-            case <-stopChan:
-                return "OK"
-            default:
-            }
-
-		a := SUFFIX_CHARS[i]
-
-		for _, b := range SUFFIX_CHARS {
-			code := fmt.Sprintf("%s%c%c%c", prefix, fourth, a, b)
-
-			var result string
-            var payload *LogPayload
-			// 🔁 EXACT retry loop
-			for {
-
-                result, payload = fetchCode(client, code)
-
-
-				if result == RES_403 {
-					fmt.Printf("[%s] 🔄 403 on %s\n", workerID, code)
-					return "NEED_CLIENT_RESET"
-				}
-
-				if result == RES_RETRY {
-					continue
-				}
-
-				break
-			}
-
-			// 🔐 INVALID / UNLOCK logic
-			if countingEnabled {
-				if result == RES_INVALID {
-					invalidCount++
-					if invalidCount >= MAX_INITIAL_INVALID {
-						fmt.Printf("[%s] 🛑 stopped after INVALID limit", workerID)
-						return "OK"
-					}
-				} else if result == RES_VALID {
-					countingEnabled = false
-					invalidCount = 0
-					fmt.Printf("[%s] 🔓 unlocked", workerID)
-				}
-			}
-
-
-            if result == RES_SINGLE || result == RES_DOUBLE || result == RES_TRIPLE {
-                if payload != nil {
-                    _ = logCode(
-                        db,
-                        workerID,
-                        result,
-                        code,
-                        payload.Teams,
-                        payload.Events,
-                        payload.Score,
-                        payload.Time,
-                        payload.Odds,
-                        payload.TotalOdds,
-                        payload.LastChange,
-                    )
-                }
-            }
-
-
-			// 🕒 jitter (human-like)
-			time.Sleep(time.Duration(rand.Intn(120)+80) * time.Millisecond)
-		}
-	}
-
-
-	return "OK"
-}
-
-/* =========================
-   PREFIX ENGINE
-========================= */
-
-func processPrefix(prefix string, db *sql.DB) {
-	// Acquire prefix semaphore (Python asyncio.Semaphore)
-	select {
-	case prefixSem <- struct{}{}:
-		defer func() { <-prefixSem }()
-	case <-stopChan:
-		return
-	}
-
-	fmt.Println("▶️ Starting prefix:", prefix)
-
-	// Loop until prefix finishes or stop signal
-	for {
+		// STOP_EVENT check (non-blocking)
 		select {
-		case <-stopChan:
-			fmt.Println("⏹ Prefix stopped:", prefix)
+		case <-STOP_EVENT:
+			fmt.Printf("[%s] 🛑 Worker %s stopping (STOP_EVENT)\n", prefix, fourthChar)
 			return
 		default:
 		}
 
-		// Create fresh TLS client (Python resets on demand)
-		client := newSportyClient()
-		if client == nil {
-			fmt.Println("❌ TLS client creation failed:")
-			time.Sleep(2 * time.Second)
-			continue
-		}
+		for _, b := range SUFFIX_CHARS {
 
-		// Fourth-character workers: A–Z0–9 (example set)
-		fourthChars := FOURTH_CHARS
+			select {
+			case <-STOP_EVENT:
+				fmt.Printf("[%s] 🛑 Worker %s stopping (STOP_EVENT)\n", prefix, fourthChar)
+				return
+			default:
+			}
 
-		var needReset int32 // 0 = false, 1 = true
+			code := prefix + fourthChar + a + b
 
-		var wg sync.WaitGroup
+			for {
+				result := fetchCode(code, client, workerID)
 
-		for _, f := range fourthChars {
-			// First worker: startIndex = 0
-			wg.Add(1)
-			go func(ch rune) {
-				defer wg.Done()
-
-				workerID := fmt.Sprintf("%s-%c-0", prefix, ch)
-
-				if res := fourthWorker(
-					prefix,
-					ch,
-					0, // startIndex
-					2, // step
-					client,
-					workerID,
-					db,
-				); res == "NEED_CLIENT_RESET" {
-					atomic.StoreInt32(&needReset, 1)
-
+				// 🔴 CASE 1: HTTP 403 → SAVE + RETRY SAME CODE
+				if result == "ERROR_403" {
+					saveFailedCode(workerID, code, "403")
+					fmt.Printf("[%s] 🔄 403 on %s, requesting TLS reset\n", workerID, code)
+					continue
 				}
-			}(f)
 
-			// Second worker: startIndex = 1 (THIS IS THE “SAME FOR SECOND WORKER”)
-			wg.Add(1)
-			go func(ch rune) {
-				defer wg.Done()
-
-				workerID := fmt.Sprintf("%s-%c-1", prefix, ch)
-
-				if res := fourthWorker(
-					prefix,
-					ch,
-					1, // startIndex (different!)
-					2, // step
-					client,
-					workerID,
-					db,
-				); res == "NEED_CLIENT_RESET" {
-					atomic.StoreInt32(&needReset, 1)
-
+				// 🟡 CASE 2: Retryable errors → retry SAME code
+				if result == "ERROR_RETRY" || result == "ERROR_TIMEOUT" {
+					continue
 				}
-			}(f)
+
+				// 🟢 CASE 3: Normal response → move to next code
+				break
+			}
 		}
-
-		// Wait for all fourth workers to finish
-		wg.Wait()
-
-		// If any worker triggered TLS reset (403), restart prefix loop
-		if atomic.LoadInt32(&needReset) == 1 {
-			fmt.Println("🔄 TLS reset for prefix:", prefix)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		// Prefix completed normally (Python: break out)
-		fmt.Println("✅ Prefix completed:", prefix)
-		return
 	}
-}
 
+	fmt.Printf("[%s] ✅ Worker %s finished normally\n", prefix, fourthChar)
+}
+func processPrefix(prefix string) {
+	// Acquire semaphore
+	PREFIX_SEMAPHORE <- struct{}{}
+	defer func() { <-PREFIX_SEMAPHORE }() // release on exit
+
+	fmt.Printf("\n🔐 STARTING PREFIX %s\n", prefix)
+
+	for {
+		select {
+		case <-STOP_EVENT:
+			fmt.Printf("[%s] 🛑 STOP_EVENT set, exiting processPrefix\n", prefix)
+			return
+		default:
+		}
+
+		client := newUTLSHttpClient() // new TLS handshake each loop
+		tasksDone := make(chan struct{})
+
+		// Launch all fourthChar workers concurrently
+		for _, fourth := range SUFFIX_CHARS {
+			go func(fourthChar string) {
+				fourthWorker(prefix, fourthChar, client, prefix+"-"+fourthChar)
+				tasksDone <- struct{}{}
+			}(fourth)
+		}
+
+		// Wait for all workers to finish
+		for i := 0; i < len(SUFFIX_CHARS); i++ {
+			<-tasksDone
+		}
+
+		// No 403 restart logic included for now
+		break // normal completion
+	}
+
+	fmt.Printf("🏁 PREFIX %s COMPLETED\n\n", prefix)
+}
 func logCode(
-	db *sql.DB,
-	workerID string,
-	label string,
+	label int,
 	code string,
+	workerID string,
 	teams string,
 	events string,
 	score string,
-	times string,
+	timeStr string,
 	odds string,
 	totalOdds string,
 	lastChange string,
-) error {
+	dbName ...string, // optional
+) {
+	dbFile := "OUTPUT.db"
+	if len(dbName) > 0 {
+		dbFile = dbName[0]
+	}
 
-	_, err := db.Exec(`
-	INSERT OR IGNORE INTO codes (
-		Worker_Id,
-		Label,
-		Code,
-		Teams,
-		Events,
-		Score,
-		Time,
-		Odds,
-		Total_odds,
-		Last_change
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-	`,
+	db, err := sql.Open("sqlite3", dbFile)
+	if err != nil {
+		log.Fatalf("DB open error: %v", err)
+	}
+	defer db.Close()
+
+	stmt := `
+	INSERT INTO codes (
+		worker_id,
+		label,
+		code,
+		teams,
+		events,
+		score,
+		time,
+		odds,
+		total_odds,
+		last_change
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	_, err = db.Exec(stmt,
 		workerID,
 		label,
 		code,
 		teams,
 		events,
 		score,
-		times,
+		timeStr,
 		odds,
 		totalOdds,
 		lastChange,
 	)
-
-	return err
-}
-
-/* =========================
-   MAIN
-========================= */
-func main() {
-	// --- Initialize database ---
-	db, err := initDB("output.db")
 	if err != nil {
-		log.Fatal("DB init failed:", err)
+		log.Printf("[Worker %s] DB insert error: %v", workerID, err)
+		return
 	}
-	defer db.Close()
 
-	// SQLite behavior must match Python
-	db.SetMaxOpenConns(1)
+	fmt.Printf("[Worker %s] => %d: %s (%s)\n", workerID, label, code, teams)
+}
+func sendDBViaGmail(senderEmail, appPassword, recipientEmail, dbPath string) {
+	if dbPath == "" {
+		dbPath = "OUTPUT.db"
+	}
 
-	// --- Initialize prefix semaphore globally ---
-	// processPrefix() will acquire/release it
-	prefixSem = make(chan struct{}, MAX_PREFIX_CONCURRENCY)
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		fmt.Println("📭 OUTPUT.db not found. No email sent.")
+		return
+	}
 
-	// --- Start runtime watchdog ---
-	go runtimeWatchdog()
+	data, err := os.ReadFile(dbPath)
+	if err != nil {
+		fmt.Printf("📭 Failed to read DB: %v\n", err)
+		return
+	}
 
-	// --- Launch prefix processors ---
-	var prefixWG sync.WaitGroup
+	// Compose basic email with attachment in RFC822 MIME
+	boundary := "SPORTYBET_BOUNDARY"
+	subject := "SportyBet Script Output DB"
+	filename := filepath.Base(dbPath)
 
+	msg := fmt.Sprintf(
+		"From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=%s\r\n\r\n--%s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nAttached is the OUTPUT.db generated by the script.\r\n\r\n--%s\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"%s\"\r\nContent-Transfer-Encoding: base64\r\n\r\n%s\r\n--%s--",
+		senderEmail,
+		recipientEmail,
+		subject,
+		boundary,
+		boundary,
+		boundary,
+		filename,
+		base64.StdEncoding.EncodeToString(data),
+		boundary,
+	)
+
+	err = smtp.SendMail(
+		"smtp.gmail.com:587",
+		smtp.PlainAuth("", senderEmail, appPassword, "smtp.gmail.com"),
+		senderEmail,
+		[]string{recipientEmail},
+		[]byte(msg),
+	)
+	if err != nil {
+		fmt.Printf("📧 Failed to send email: %v\n", err)
+		return
+	}
+
+	fmt.Println("📧 OUTPUT.db sent successfully via Gmail.")
+}
+func runtimeWatchdog(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if time.Now().After(END_TIME) {
+				fmt.Println("⏰ MAX EXECUTION TIME REACHED — STOPPING SCRIPT")
+				close(STOP_EVENT) // signal stop
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+func mainAsync() {
+	fmt.Println("STARTING PREFIX ENGINE")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start watchdog
+	go runtimeWatchdog(ctx)
+
+	// Start all prefixes
+	var wg sync.WaitGroup
 	for _, prefix := range PREFIXES {
-		prefixWG.Add(1)
-
+		wg.Add(1)
 		go func(p string) {
-			defer prefixWG.Done()
-			processPrefix(p, db)
+			defer wg.Done()
+			processPrefix(p) // you already have this function
 		}(prefix)
 	}
 
-	// --- Close stopChan when all prefixes finish ---
-	go func() {
-		prefixWG.Wait()
-		select {
-		case <-stopChan:
-			// already closed by watchdog
-		default:
-			close(stopChan)
+	// Wait until STOP_EVENT is closed
+	<-STOP_EVENT
+	fmt.Println("🛑 Cancelling remaining tasks...")
+
+	// Wait for all prefix goroutines to finish gracefully
+	wg.Wait()
+}
+func main() {
+
+	// 🔒 Read credentials safely
+	sender := os.Getenv("GMAIL_SENDER")
+	password := os.Getenv("GMAIL_APP_PASSWORD")
+	receiver := os.Getenv("GMAIL_RECEIVER")
+
+	// ✅ Python finally-equivalent
+	defer func() {
+		fmt.Println("📤 Program exiting — attempting to send OUTPUT.db")
+
+		if sender == "" || password == "" || receiver == "" {
+			fmt.Println("⚠️ Gmail env vars missing — skipping email")
+			return
+		}
+
+		sendDBViaGmail(
+			sender,
+			password,
+			receiver,
+			"OUTPUT.db",
+		)
+	}()
+
+	// 🛡️ Panic safety (keep this)
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("💥 Recovered from panic:", r)
 		}
 	}()
 
-	// --- Block until watchdog OR prefixes complete ---
-	<-stopChan
-
-	fmt.Println("🏁 All processing finished")
-
-	// --- Send output.db via email (once, Python-style) ---
-	fmt.Println("📤 Sending output.db via email...")
-	if err := sendOutputEmail("output.db"); err != nil {
-		fmt.Println("❌ Email send failed:", err)
-	} else {
-		fmt.Println("✅ Email sent successfully")
-	}
-
-	fmt.Println("✅ Program exited cleanly")
+	// 🚀 Run main engine
+	mainAsync()
 }
