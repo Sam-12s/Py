@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
+	"encoding/base64"
 	// SQLite driver
 	_ "github.com/mattn/go-sqlite3"
 
