@@ -205,6 +205,7 @@ func fetchCode(localCode string, client *http.Client, sessionID string) string {
 	}
 
 	if resp.StatusCode != 200 {
+		fmt.Println(resp.StatusCode)
 		return "ERROR_RETRY"
 	}
 
@@ -217,11 +218,18 @@ func fetchCode(localCode string, client *http.Client, sessionID string) string {
 
 	var response map[string]any
 	if err := json.Unmarshal(raw, &response); err != nil {
+				fmt.Printf(
+			"[%s] JSON decode error: %v | Raw: %.200s\n",
+			sessionID,
+			err,
+			text,
+		)
 		return "ERROR_RETRY"
 	}
 
 	success, ok := response["Success"].(bool)
 	if !ok || !success {
+		fmt.Println("INVALID")
 		return "INVALID"
 	}
 
@@ -229,6 +237,7 @@ func fetchCode(localCode string, client *http.Client, sessionID string) string {
 	events := value["Events"].([]any)
 
 	if len(events) > 15 {
+		fmt.Println("VALID")
 		return "VALID"
 	}
 
