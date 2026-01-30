@@ -7,13 +7,8 @@ import smtplib
 from email.message import EmailMessage
 from pathlib import Path
 import random
-import time
-# ===== RPS METRICS =====
-TOTAL_REQUESTS = 0      # all requests attempted
-FAILED_REQUESTS = 0     # request failed due to timeout, exception, or non-200
-REQUEST_COUNTER = 0
-REQUEST_COUNTER_LOCK = asyncio.Lock()
-START_TS = time.perf_counter()
+
+
 
 MAX_RUNTIME_MINUTES = 355  # ⏱️ CHANGE THIS
 START_TIME = datetime.now()
@@ -51,7 +46,7 @@ def init_db(db_name="OUTPUT.db"):
     conn.close()
 
 
-PREFIXES = ['3J', '4J', 'VJ', 'L4', 'N4', '7J', 'TK', 'RH', 'U4', '14', '5J', 'RK', '44', 'FK', 'MK', '1K', 'JK', 'ZH', 'R4', 'VH']
+PREFIXES = ['X1']
 
 USER_AGENTS = [
     # Desktop browsers
@@ -66,7 +61,7 @@ USER_AGENTS = [
 
 SUFFIX_CHARS = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L',
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', "H", 'J', 'K', 'L',
     'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W',
     'X', 'Y', 'Z'
 ]
@@ -77,29 +72,6 @@ PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
 FAILED_CODES_FILE = "failed_403_codes.log"
 
-async def rps_reporter(interval=15):
-    last_total = 0
-    last_fail = 0
-    last_time = time.perf_counter()
-
-    while not STOP_EVENT.is_set():
-        await asyncio.sleep(interval)
-
-        now = time.perf_counter()
-        async with REQUEST_COUNTER_LOCK:
-            total = TOTAL_REQUESTS
-            fail = FAILED_REQUESTS
-
-        delta_time = now - last_time
-        total_rps = (total - last_total) / delta_time
-        fail_rps = (fail - last_fail) / delta_time
-        success_rps = total_rps - fail_rps
-
-        print(f"[RPS] total={total_rps:.2f}/s | success={success_rps:.2f}/s | failed={fail_rps:.2f}/s | total={total}")
-
-        last_total = total
-        last_fail = fail
-        last_time = now
 
 def save_failed_code(worker_id, code, reason):
     line = f"{datetime.now().isoformat()} | {worker_id} | {code} | {reason}\n"
@@ -108,14 +80,13 @@ def save_failed_code(worker_id, code, reason):
 
 
 async def fetch_code(local_code, client, session_id):
-    global TOTAL_REQUESTS,FAILED_REQUESTS
     payload = {
         "Guid": local_code,
         "Lng": "en",
-        "partner": "1"
+        "partner": "159"
     }
 
-    url = "https://ca.1xbet.com/service-api/LiveBet/Open/GetCoupon"
+    url = "https://1xbet.ng/service-api/LiveBet/Open/GetCoupon"
 
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
@@ -124,171 +95,99 @@ async def fetch_code(local_code, client, session_id):
         "Connection": "keep-alive",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
-        "Referer": "https://ca.1xbet.com/en",
-        "Origin": "https://ca.1xbet.com",
+        "Referer": "https://1xbet.ng/en",
+        "Origin": "https://1xbet.ng",
     }
-
-
     try:
         resp = await client.post(url, headers=headers, json=payload)
-
-        async with REQUEST_COUNTER_LOCK:
-            TOTAL_REQUESTS += 1
-
     except ConnectTimeout:
         print(f"[{session_id}] ⏱️ ConnectTimeout on {local_code}")
-        FAILED_REQUESTS += 1
         return "ERROR_TIMEOUT"
-
     except ReadTimeout:
         print(f"[{session_id}] 📥 ReadTimeout on {local_code}")
-        FAILED_REQUESTS += 1
         return "ERROR_RETRY"
-
     except RequestError as e:
         print(f"[{session_id}] 🌐 Network error: {e}")
-        FAILED_REQUESTS += 1
         return "ERROR_RETRY"
-
     content_type = resp.headers.get("Content-Type", "")
     text = resp.text.strip()
-
     if resp.status_code == 403:
         return "ERROR_403"
-
     if resp.status_code != 200:
-        FAILED_REQUESTS += 1
+        print(f"{resp.status_code}")
         return "ERROR_RETRY"
-
     if content_type.startswith("application/json"):
         try:
             response = resp.json()
         except Exception as e:
             print(f"[{session_id}] JSON decode error: {e} | Raw: {text[:200]}")
             return True
-
         if not response:
             print("Empty response")
             return False
-
         if not response.get("Success"):
             return "INVALID"
-
         elif response.get("Success"):
             pg = response.get("Value")
-
             number_of_event = len(pg.get("Events", []))
             all_events = pg.get("Events", [])
-
-            if number_of_event != 4:
+            if number_of_event > 15:
                 return "VALID"
-
-
-
-            elif number_of_event == 4:
+            else:
 
                 try:
-
-                    types = str(all_events[0].get("SportNameEng"))
-
-                    types1 = str(all_events[1].get("SportNameEng"))
-
-                    types2 = str(all_events[2].get("SportNameEng"))
-
-                    types3 = str(all_events[3].get("SportNameEng"))
-
-                    event = str(all_events[0].get("GroupName"))
-
-                    event1 = str(all_events[1].get("GroupName"))
-
-                    event2 = str(all_events[2].get("GroupName"))
-
-                    event3 = str(all_events[3].get("GroupName"))
-
-                    timestamp = int(all_events[0].get("Start"))
-
-                    timestamp1 = int(all_events[1].get("Start"))
-
-                    timestamp2 = int(all_events[2].get("Start"))
-
-                    timestamp3 = int(all_events[3].get("Start"))
-
-                    match_date = datetime.fromtimestamp(timestamp).date()
-
-                    match_date1 = datetime.fromtimestamp(timestamp1).date()
-
-                    match_date2 = datetime.fromtimestamp(timestamp2).date()
-
-                    match_date3 = datetime.fromtimestamp(timestamp3).date()
-
-                    match_time = datetime.fromtimestamp(timestamp).time()
-
-                    match_time1 = datetime.fromtimestamp(timestamp1).time()
-
-                    match_time2 = datetime.fromtimestamp(timestamp2).time()
-
-                    match_time3 = datetime.fromtimestamp(timestamp3).time()
-
-                    match_times = f"{match_time}||{match_time1}||{match_time2}||{match_time3}"
-
-                    score = all_events[0].get("MarketName")
-
-                    score1 = all_events[1].get("MarketName")
-
-                    score2 = all_events[2].get("MarketName")
-
-                    score3 = all_events[3].get("MarketName")
-
-                    outcomes = f"{score}|{score1}|{score2}|{score3}"
-
+                    i = 0
+                    events_status = []
+                    datetimestamp = []
+                    match_date = []
+                    odds = []
+                    sports = []
+                    lst_events = []
+                    lst_match_time = []
+                    lst_scores = []
+                    lst_teams = []
                     today_date = datetime.now().date()
+                    for _ in range(number_of_event):
+                        valid = all_events[i].get("Finish")
+                        timestamp = int(all_events[i].get("Start"))
+                        odd = (all_events[i].get("Coef"))
+                        sport = str(all_events[i].get("SportNameEng"))
+                        event = str(all_events[i].get("GroupName"))
+                        score = all_events[i].get("MarketName")
+                        team = f"{all_events[i].get('Opp1')} vs {all_events[i].get("Opp2")}"
+                        datetimestamp.append(timestamp)
+                        events_status.append(valid)
+                        odds.append(odd)
+                        sports.append(sport)
+                        lst_events.append(event)
+                        lst_scores.append(score)
+                        lst_teams.append(team)
+                        i +=1
+                    for timestamps in datetimestamp:
+                        start = datetime.fromtimestamp(timestamps).date()
+                        start2 = datetime.fromtimestamp(timestamps).time()
+                        match_date.append(start)
+                        lst_match_time.append(start2)
+                    result = odds[0]
+                    for i in range(1, len(odds)):
+                        result *= float(odds[i])
 
-                    valid = all_events[0].get("Finish")
-
-                    valid1 = all_events[1].get("Finish")
-
-                    valid2 = all_events[2].get("Finish")
-
-                    valid3 = all_events[3].get("Finish")
-
-                    odd = str(all_events[0].get("Coef"))
-
-                    odd1 = str(all_events[1].get("Coef"))
-
-                    odd2 = str(all_events[2].get("Coef"))
-
-                    odd3 = str(all_events[3].get("Coef"))
-
-                    calculate_odds = (float(odd) * float(odd1) * float(odd2) * float(odd3))
-
-                    odds = f"{odd}|{odd1}|{odd2}|{odd3}"
-
-                    total_odd = str(calculate_odds)
-
-                    events = f"{event}|{event1}|{event2}|{event3}"
-
+                    match_times = "|".join(f"{tmes}"for tmes in lst_match_time)
+                    outcomes = "|".join(f"{sc}" for sc in lst_scores)
+                    events = "|".join(f"{ev}" for ev in lst_events)
+                    var_odd = "|".join(f"{od}"for od in odds)
+                    total_odd = str(result)
+                    total_result = float(result)
                 except KeyError as ff:
-
                     print(ff, '1')
-
                     return False
 
-                if (valid, valid1, valid2,
-                    valid3 == False) and match_date == today_date and match_date1 == today_date and match_date2 == today_date and match_date3 == today_date and calculate_odds > 50.00 and types == "Football" and types1 == "Football" and types2 == "Football" and types3 == "Football":
-
-                    teams1 = f"{all_events[0].get('Opp1')} vs {all_events[0]}"
-
-                    teams2 = f"{pg[1]['homeTeamName']} vs {pg[1]['awayTeamName']}"
-
-                    teams3 = f"{pg[2]['homeTeamName']} vs {pg[2]['awayTeamName']}"
-
-                    teams = f"{teams1}|{teams2}|{teams3}"
-
+                if all(status == False for status in events_status) and all(match_start == today_date for match_start in match_date) and 80.00 < total_result < 500 and all(sportnames == "Football" for sportnames in sports):
+                    teams = "|".join(f"{tm}"for tm in lst_teams)
                     init_db()
+                    log_code(number_of_event , local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, "NA")
 
-                    log_code("4x", local_code, session_id, teams, events, outcomes, match_times, odds, total_odd, "NA")
-
-                    print("FOUR ODD")
+                    print("BAGGED")
 
                     return "VALID"
 
@@ -330,17 +229,16 @@ async def fourth_worker(prefix, fourth_char, client, worker_id):
                 if result == "ERROR_403":
                     save_failed_code(worker_id, code, "403")
                     print(f"[{worker_id}] 🔄 403 on {code}, requesting TLS reset")
-                    return "NEED_CLIENT_RESET"
+                    continue
 
                 # 🟡 CASE 2: Retryable error (timeout, parse, etc.)
-                if result == "ERROR_RETRY":
-                    await asyncio.sleep(random.uniform(1, 3))
+                elif result == "ERROR_RETRY" or result == "ERROR_TIMEOUT":
                     continue  # retry SAME code
-
+                else:
                 # 🟢 CASE 3: Normal response (VALID / INVALID / others)
-                break
+                    break
 
-        
+
             # If counting is disabled → INVALIDs are ignored forever
 
     print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
@@ -353,20 +251,19 @@ async def process_prefix(prefix):
 
             # 🔑 NEW CLIENT = NEW TLS HANDSHAKE
             async with httpx.AsyncClient(
-                http2=False,
-                timeout=httpx.Timeout(200.0, connect=50.0),
-                limits=httpx.Limits(
-                    max_connections=34,
-                    max_keepalive_connections=34
-                ),
-                headers={
-                    "User-Agent": random.choice(USER_AGENTS),
-                    "Accept": "application/json, text/plain, */*",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Referer": "https://www.sportybet.com/",
-                    "Origin": "https://www.sportybet.com",
-                    "Connection": "keep-alive",
-                }
+                    timeout=httpx.Timeout(50.0, connect=50.0),
+                    limits=httpx.Limits(
+                        max_connections=34,
+                        max_keepalive_connections=34
+                    ),
+                    headers={
+                        "User-Agent": random.choice(USER_AGENTS),
+                        "Accept": "application/json, text/plain, */*",
+                        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+                        "Referer": "https://1xbet.ng/en",
+                        "Origin": "https://1xbet.ng",
+                        "Connection": "keep-alive",
+                    }
             ) as client:
 
                 # 🚀 START ALL WORKERS FOR THIS PREFIX
@@ -383,10 +280,8 @@ async def process_prefix(prefix):
                 # 🔴 CHECK IF ANY WORKER REQUESTED TLS RESET
                 if "NEED_CLIENT_RESET" in results:
                     print(f"[{prefix}] 🔄 403 DETECTED — closing client & sleeping 30s")
-
                     # client is automatically CLOSED here by context manager
-                    await asyncio.sleep(5)
-
+                    await asyncio.sleep(30)
                     # 🔁 RESTART PREFIX WITH NEW TLS
                     continue
 
@@ -395,7 +290,7 @@ async def process_prefix(prefix):
 
         print(f"🏁 PREFIX {prefix} COMPLETED\n")
 
-def log_code(label, code, worker_id, teams, events, score, times, odds, total_odds, last_change, db_name="OUTPUT.db"):
+def log_code(label, code, worker_id, teams, events, score, time, odds, total_odds, last_change, db_name="OUTPUT.db"):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     cursor.execute(
@@ -421,7 +316,7 @@ def log_code(label, code, worker_id, teams, events, score, times, odds, total_od
             str(teams),
             str(events),
             str(score),
-            str(times),
+            str(time),
             str(odds),
             str(total_odds),
             str(last_change),
@@ -472,7 +367,7 @@ async def runtime_watchdog():
 
 async def main_async():
     print("STARTING PREFIX ENGINE")
-    rps_task = asyncio.create_task(rps_reporter(interval=15))
+
     watchdog_task = asyncio.create_task(runtime_watchdog())
 
     prefix_tasks = [
@@ -497,17 +392,7 @@ def main():
     try:
         asyncio.run(main_async())
     finally:
-        # 🔽 CHANGE THESE VALUES
-        gmail_sender = "1btcryptopayment@gmail.com"
-        gmail_app_password = "zjti bewf hoib dteb"
-        gmail_receiver = "tidianeyonkeu515@gmail.com"
-
-        send_db_via_gmail(
-            gmail_sender,
-            gmail_app_password,
-            gmail_receiver,
-            "OUTPUT.db"
-        )
+        pass
 
 
 if __name__ == "__main__":
