@@ -143,7 +143,7 @@ func newUTLSHttpClient() *http.Client {
 			InsecureSkipVerify: false,
 		}
 
-		uconn := utls.UClient(rawConn, cfg, utls.HelloChrome_124)
+		uconn := utls.UClient(rawConn, cfg, utls.HelloChrome_Auto)
 		if err := uconn.Handshake(); err != nil {
 			return nil, err
 		}
