@@ -17,6 +17,7 @@ import (
 	"os"
 	"sync"
 	"encoding/base64"
+	"database/sql"
 	// SQLite driver
 	_ "github.com/mattn/go-sqlite3"
 
