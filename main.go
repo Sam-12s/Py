@@ -555,7 +555,7 @@ func mainAsync() {
 	wg.Wait()
 }
 func main() {
-
+	log.SetOutput(io.Discard)
 	// 🔒 Read credentials safely
 	sender := os.Getenv("GMAIL_SENDER")
 	password := os.Getenv("GMAIL_APP_PASSWORD")
