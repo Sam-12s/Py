@@ -7,15 +7,15 @@ import smtplib
 from email.message import EmailMessage
 from pathlib import Path
 import random
+import time
 sys.stdout.reconfigure(line_buffering=True)
-
 
 MAX_RUNTIME_MINUTES = 355  # ⏱️ CHANGE THIS
 START_TIME = datetime.now()
 END_TIME = START_TIME + timedelta(minutes=MAX_RUNTIME_MINUTES)
 
 STOP_EVENT = asyncio.Event()
-MAX_INITIAL_INVALID = 40
+
 
 
 def init_db(db_name="OUTPUT.db"):
@@ -25,7 +25,6 @@ def init_db(db_name="OUTPUT.db"):
     cursor.execute("PRAGMA synchronous=NORMAL;")
     cursor.execute("PRAGMA cache_size=-50000;")  # ~50MB memory
     cursor.execute("PRAGMA temp_store=MEMORY;")  # faster
-    cursor.execute("PRAGMA locking_mode=EXCLUSIVE;")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS codes (
             ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +34,7 @@ def init_db(db_name="OUTPUT.db"):
             Teams TEXT,   -- store teams as string, e.g. "Man Utd vs Chelsea"
             Events TEXT,
             Score TEXT,
-            Time TEXT,
+            Times TEXT,
             Odds TEXT,
             Total_odds TEXT,
             Last_change TEXT,
@@ -45,7 +44,8 @@ def init_db(db_name="OUTPUT.db"):
     conn.commit()
     conn.close()
 
-PREFIXES = ['L01', 'V7Z', 'URF', 'PFJ', 'T99', 'YA0', 'RFF', 'SF4', 'GML', 'GQ8', 'XMZ', 'MG7', 'YKT', 'YSJ', 'VW0', 'V1U', 'V00', 'R73', 'J5L', 'ZYX', 'ZSD', 'HYV', 'TPB']
+
+PREFIXES = ['M2B']
 
 USER_AGENTS = [
     # Desktop browsers
@@ -57,12 +57,13 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (Linux; Android 11; Pixel 4 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Mobile Safari/537.36",
 ]
+DB_QUEUE = asyncio.Queue()
 
 SUFFIX_CHARS = [
-    '0','1','2','3','4','5','6','7','8','9',
-    'A','B','C','D','E','F','G','H','J','K','L',
-    'M','N','P','Q','R','S','T','U','V','W',
-    'X','Y','Z'
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', "H", 'J', 'K', 'L',
+    'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W',
+    'X', 'Y', 'Z'
 ]
 
 MAX_PARALLEL_PREFIXES = int(len(PREFIXES))  # start with 2–4
@@ -71,38 +72,44 @@ PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 
 FAILED_CODES_FILE = "failed_403_codes.log"
 
+
+def current_timestamp_ms():
+    """
+    Returns the current timestamp in milliseconds.
+    """
+    return int(time.time() * 1000)
+
+
 def save_failed_code(worker_id, code, reason):
     line = f"{datetime.now().isoformat()} | {worker_id} | {code} | {reason}\n"
     with open(FAILED_CODES_FILE, "a", buffering=1) as f:
         f.write(line)
 
+
 async def fetch_code(local_code, client, session_id):
-
-
-    url = f"https://www.sportybet.com/api/ng/orders/share/{local_code}"
+    url = f"https://www.sportybet.com/api/ng/orders/share/{local_code}?_t={current_timestamp_ms()}"
 
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
         "Referer": "https://www.sportybet.com/",
         "Origin": "https://www.sportybet.com",
     }
 
-
     resp = await client.get(url, headers=headers)
-
 
     content_type = resp.headers.get("Content-Type", "")
     text = resp.text.strip()
 
     if resp.status_code == 403:
+        print(f"{resp.status_code}")
         return "ERROR_403"
 
-    if resp.status_code !=200:
+    if resp.status_code != 200:
+        print(f"{resp.status_code}")
         return "ERROR_RETRY"
 
     if content_type.startswith("application/json"):
@@ -110,12 +117,12 @@ async def fetch_code(local_code, client, session_id):
             response = resp.json()
         except Exception as e:
             print(f"[{session_id}] JSON decode error: {e} | Raw: {text[:200]}")
-            
+
             return True
 
         if not response:
             print("Empty response")
-            
+
             return False
 
         if response["message"] == 'The code is invalid.':
@@ -126,160 +133,97 @@ async def fetch_code(local_code, client, session_id):
             pg = response["data"]["outcomes"]
             number_of_event = len(pg)
 
-
-            if number_of_event > 3:
-                print("Retry", "-----", str(session_id), flush=True)
+            if number_of_event == 0:
+                print("NO-OUTCOME", "-----", str(session_id), flush=True)
                 return "VALID"
 
-            elif number_of_event == 3:
+            else:
+
                 try:
-                    types = str(pg[0]["sport"]["category"]["name"])
-                    types1 = str(pg[1]["sport"]["category"]["name"])
-                    types2 = str(pg[2]["sport"]["category"]["name"])
-                    event = str(pg[0]["markets"][0]["desc"])
-                    event1 = str(pg[1]["markets"][0]["desc"])
-                    event2 = str(pg[2]["markets"][0]["desc"])
-                    date = int(pg[0]['estimateStartTime'])
-                    date1 = int(pg[1]['estimateStartTime'])
-                    date2 = int(pg[2]['estimateStartTime'])
-                    timestamp = date / 1000
-                    timestamp1 = date1 / 1000
-                    timestamp2 = date2 / 1000
-                    match_date = datetime.fromtimestamp(timestamp).date()
-                    match_date1 = datetime.fromtimestamp(timestamp1).date()
-                    match_date2 = datetime.fromtimestamp(timestamp2).date()
-                    match_time = datetime.fromtimestamp(timestamp).time()
-                    match_time1 = datetime.fromtimestamp(timestamp1).time()
-                    match_time2 = datetime.fromtimestamp(timestamp2).time()
-                    match_times = f"{match_time}||{match_time1}||{match_time2}"
-                    change = int(pg[0]["markets"][0]["lastOddsChangeTime"])
-                    change1 = int(pg[1]["markets"][0]["lastOddsChangeTime"])
-                    change2 = int(pg[2]["markets"][0]["lastOddsChangeTime"])
-                    match_odd_changes = datetime.fromtimestamp(change/1000).strftime("%H:%M:%S")
-                    match_odd_changes1 = datetime.fromtimestamp(change1/1000).strftime("%H:%M:%S")
-                    match_odd_changes2 = datetime.fromtimestamp(change2 / 1000).strftime("%H:%M:%S")
-                    score =  pg[0]["markets"][0]["outcomes"][0]["desc"]
-                    score1 = pg[1]["markets"][0]["outcomes"][0]["desc"]
-                    score2 = pg[2]["markets"][0]["outcomes"][0]["desc"]
-                    outcomes = f"{score}|{score1}|{score2}"
+                    i = 0
+                    events_status = []
+                    datetimestamp = []
+                    match_date = []
+                    odds = []
+                    sports = []
+                    lst_events = []
+                    lst_match_time = []
+                    lst_scores = []
+                    lst_teams = []
+                    lst_change = []
+                    lst_match_oddchanges = []
+                    lst_type = []
                     today_date = datetime.now().date()
-                    valid = pg[0]['matchStatus']
-                    odd = str(pg[0]["markets"][0]["outcomes"][0]["odds"])
-                    odd1 = str(pg[1]["markets"][0]["outcomes"][0]["odds"])
-                    odd2 = str(pg[2]["markets"][0]["outcomes"][0]["odds"])
-                    calculate_odds = (float(odd) * float(odd1) * float(odd2))
-                    odds = f"{odd}|{odd1}|{odd2}"
-                    total_odd = str(calculate_odds)
-                    change_times = f"{match_odd_changes}||{match_odd_changes1}||{match_odd_changes2}"
-                    events = f"{event}|{event1}|{event2}"
+                    for _ in range(number_of_event):
+                        valid = pg[i]['matchStatus']
+                        timestamp = int(pg[i]['estimateStartTime'])
+                        odd = (pg[i]["markets"][0]["outcomes"][0]["odds"])
+                        sport = str(pg[i]["sport"]["name"])
+                        types = str(pg[i]["sport"]["category"]["name"])
+                        event = str(pg[i]["markets"][0]["desc"])
+                        score = pg[i]["markets"][0]["outcomes"][0]["desc"]
+                        team = f"{pg[i]['homeTeamName']} vs {pg[i]['awayTeamName']}"
+                        change = int(pg[i]["markets"][0]["lastOddsChangeTime"])
+                        lst_change.append(change)
+                        datetimestamp.append(timestamp)
+                        events_status.append(valid)
+                        odds.append(odd)
+                        sports.append(sport)
+                        lst_events.append(event)
+                        lst_scores.append(score)
+                        lst_teams.append(team)
+                        lst_type.append(types)
+                        i += 1
+                    for timestamps in datetimestamp:
+                        s = timestamps/1000
+                        start = datetime.fromtimestamp(s).date()
+                        start2 = datetime.fromtimestamp(s).time()
+                        match_date.append(start)
+                        lst_match_time.append(start2)
+                    for changes in lst_change:
+                        r = datetime.fromtimestamp(changes / 1000).strftime("%H:%M:%S")
+                        lst_match_oddchanges.append(r)
+                    result = 1.0
+                    for odd in odds:
+                        result *= float(odd)
+                    match_times = "|".join(f"{tmes}" for tmes in lst_match_time)
+                    outcomes = "|".join(f"{sc}" for sc in lst_scores)
+                    events = "|".join(f"{ev}" for ev in lst_events)
+                    var_odd = "|".join(f"{od}" for od in odds)
+                    total_odd = str(result)
+                    total_result = float(result)
+                    change_times = "|".join(f"{chng}" for chng in lst_match_oddchanges)
+                    teams = "|".join(f"{tm}" for tm in lst_teams)
+
                 except KeyError as ff:
                     print(ff, '1')
                     return False
 
-                if (valid in ["Not start", "H1"]) and match_date == today_date and match_date1 == today_date and match_date2 == today_date and calculate_odds > 15.00 and types != "Simulated Reality League" and types1 != "Simulated Reality League" and types2 != "Simulated Reality League":
-                    teams1 = f"{pg[0]['homeTeamName']} vs {pg[0]['awayTeamName']}"
-                    teams2 = f"{pg[1]['homeTeamName']} vs {pg[1]['awayTeamName']}"
-                    teams3 = f"{pg[2]['homeTeamName']} vs {pg[2]['awayTeamName']}"
-                    teams = f"{teams1}|{teams2}|{teams3}"
+                if all(status in ["Not start","H1"] for status in events_status) and all(match_start == today_date for match_start in match_date) and all(stat != "Simulated Reality League" for stat in lst_type) and all(sportn == "Football" for sportn in sports):
                     init_db()
-                    log_code("TRIPLE", local_code, session_id, teams,events, outcomes,match_times,odds,total_odd,change_times)
-                    print("TRIPLE ODD")
-                    return False
+                    if  number_of_event == 4 and 100.0 < total_result < 200.0:
+                        log_code("QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd,change_times)
+                        print("QUADRIPLE ODD")
+                        return "VALID"
+                    elif number_of_event == 3 and 18.00 < total_result < 200.0:
+                        log_code("TRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd,change_times)
+                        print("TRIPLE ODD")
+                        return "VALID"
+                    elif number_of_event == 2 and 25.00 < total_result < 180.0 and all(outcom == 'Correct Score' for outcom in lst_events):
+                        log_code("DOUBLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd,change_times)
+                        print("DOUBLE ODD")
+                        return "VALID"
+                    elif number_of_event == 1 and 5.00 < total_result < 30.0 and all(outcom == 'Correct Score' for outcom in lst_events):
+                        log_code("SINGLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd,change_times)
+                        print("SINGLE ODD")
+                        return "VALID"
+                    else:
+                        print(f"UNSATISFIED--------{local_code}")
                 else:
                     print(f"FORGET--------{local_code}")
                     return False
-
-            elif number_of_event == 2:
-                try:
-                    types = str(pg[0]["sport"]["category"]["name"])
-                    types1 = str(pg[1]["sport"]["category"]["name"])
-                    date = int(pg[0]['estimateStartTime'])
-                    date1 = int(pg[1]['estimateStartTime'])
-                    timestamp = date / 1000
-                    timestamp1 = date1 / 1000
-                    match_date = datetime.fromtimestamp(timestamp).date()
-                    match_date1 = datetime.fromtimestamp(timestamp1).date()
-                    match_time = datetime.fromtimestamp(timestamp).time()
-                    match_time1 = datetime.fromtimestamp(timestamp1).time()
-                    match_times = f"{match_time}||{match_time1}"
-                    change = int(pg[0]["markets"][0]["lastOddsChangeTime"])
-                    change1 = int(pg[1]["markets"][0]["lastOddsChangeTime"])
-                    match_odd_changes = datetime.fromtimestamp(change/1000).strftime("%H:%M:%S")
-                    match_odd_changes1 = datetime.fromtimestamp(change1/1000).strftime("%H:%M:%S")
-                    score =  pg[0]["markets"][0]["outcomes"][0]["desc"]
-                    score1 = pg[1]["markets"][0]["outcomes"][0]["desc"]
-                    scores = f"{score}|{score1}"
-                    today_date = datetime.now().date()
-                    valid = pg[0]['matchStatus']
-                    odd = str(pg[0]["markets"][0]["outcomes"][0]["odds"])
-                    odd1 = str(pg[1]["markets"][0]["outcomes"][0]["odds"])
-                    calculate_odds = (float(odd) * float(odd1))
-                    odds = f"{odd}|{odd1}"
-                    total_odd = str(calculate_odds)
-                    change_times = f"{match_odd_changes}||{match_odd_changes1}"
-                    event = str(pg[0]["markets"][0]["desc"])
-                    event1 = str(pg[1]["markets"][0]["desc"])
-                    events = f"{event}|{event1}"
-                except KeyError as ff:
-                    print(ff, '1')
-                    return False
-
-                if  (valid in ["Not start", "H1"]) and event == "Correct Score" and event1 == "Correct Score"and match_date == today_date and match_date1 == today_date and types != "Simulated Reality League" and types1 != "Simulated Reality League":
-                    teams1 = f"{pg[0]['homeTeamName']} vs {pg[0]['awayTeamName']}"
-                    teams2 = f"{pg[1]['homeTeamName']} vs {pg[1]['awayTeamName']}"
-                    teams = f"{teams1}|{teams2}"
-                    init_db()
-                    log_code("DOUBLE", local_code, session_id, teams,events,scores,match_times,odds,total_odd,change_times)
-                    print("DOUBLE ODD")
-                    return False
-                elif (valid in ["Not start", "H1"]) and match_date == today_date and match_date1 == today_date and calculate_odds > 15.00 and types != "Simulated Reality League" and types1 != "Simulated Reality League":
-                    teams1 = f"{pg[0]['homeTeamName']} vs {pg[0]['awayTeamName']}"
-                    teams2 = f"{pg[1]['homeTeamName']} vs {pg[1]['awayTeamName']}"
-                    teams = f"{teams1}|{teams2}"
-                    init_db()
-                    log_code("X/1X2", local_code, session_id, teams,events,scores,match_times,odds,total_odd,change_times)
-                    print("X/1X2")
-                    return False
-                else:
-                    print("FORGET")
-                    return False
-            elif number_of_event == 1:
-                try:
-                    types = str(pg[0]["sport"]["category"]["name"])
-                    date23 = int(pg[0]['estimateStartTime'])
-                    timestamp23 = date23 / 1000
-                    match_date23 = datetime.fromtimestamp(timestamp23).date()
-                    today_date = datetime.now().date()
-                    valid23 = pg[0]['matchStatus']
-                    match_time23 = datetime.fromtimestamp(timestamp23).time()
-                    score2 = pg[0]["markets"][0]["outcomes"][0]["desc"]
-                    score23 = f"{score2}"
-                    odd23 = str(pg[0]["markets"][0]["outcomes"][0]["odds"])
-                    change23 = int(pg[0]["markets"][0]["lastOddsChangeTime"])
-                    match_odd_changes23 = datetime.fromtimestamp(change23/1000).strftime("%H:%M:%S")
-                    change_times23 = f"{match_odd_changes23}"
-                    odds23 = f"{odd23}"
-                    event = str(pg[0]["markets"][0]["desc"])
-                except KeyError as ff3:
-                    print(ff3, '3')
-                    return False
-
-                if valid23 in ["Not start", "H1"] and event == "Correct Score" and match_date23 == today_date and types != "Simulated Reality League":
-                    teams = f"{pg[0]['homeTeamName']} vs {pg[0]['awayTeamName']}"
-                    init_db()
-                    log_code("SINGLE", local_code, session_id, teams,event,score23,match_time23,odds23,odds23,change_times23)
-                    print("SINGLE ODD")
-
-                    return False
-                else:
-                    print("Ha")
-                    return False
-
-            else:
-                print("wow-1")
-            return "VALID"
         else:
-            print("wow")
+            print(f"NAHH--------{local_code}")
 
             return False
 
@@ -305,183 +249,94 @@ async def fetch_code(local_code, client, session_id):
                 node = elem.find(path)
                 return node.text if node is not None else None
 
-            if number_of_event > 3:
-                print("Retry", "-----", str(session_id), flush=True)
-                return "VALID"
-
-
-            if number_of_event == 3:
-
+            if number_of_event != 0:
                 try:
-                    types = (find(outcomes[0], "sport/category/name"))
-                    types1 = (find(outcomes[1], "sport/category/name"))
-                    types2 = (find(outcomes[2], "sport/category/name"))
-                    date = int(find(outcomes[0], "estimateStartTime"))
-                    date1 = int(find(outcomes[1], "estimateStartTime"))
-                    date2 = int(find(outcomes[2], "estimateStartTime"))
-                    match_date = datetime.fromtimestamp(date / 1000).date()
-                    match_date1 = datetime.fromtimestamp(date1 / 1000).date()
-                    match_date2 = datetime.fromtimestamp(date2 / 1000).date()
-                    match_time = datetime.fromtimestamp(date/1000).time()
-                    match_time1 = datetime.fromtimestamp(date1 / 1000).time()
-                    match_time2 = datetime.fromtimestamp(date2 / 1000).time()
+                    i = 0
+                    events_status = []
+                    datetimestamp = []
+                    match_date = []
+                    odds = []
+                    sports = []
+                    lst_events = []
+                    lst_match_time = []
+                    lst_scores = []
+                    lst_teams = []
+                    lst_change = []
+                    lst_match_oddchanges = []
+                    lst_type = []
                     today_date = datetime.now().date()
-                    match_times = f"{match_time}||{match_time1}||{match_time2}"
-                    change = int(find(outcomes[0], "markets/markets/lastOddsChangeTime"))
-                    match_odd_changes = datetime.fromtimestamp(change/1000).strftime("%H:%M:%S")
-                    change1 = int(find(outcomes[1], "markets/markets/lastOddsChangeTime"))
-                    match_odd_changes1 = datetime.fromtimestamp(change1/1000).strftime("%H:%M:%S")
-                    change2 = int(find(outcomes[2], "markets/markets/lastOddsChangeTime"))
-                    match_odd_changes2 = datetime.fromtimestamp(change2/1000).strftime("%H:%M:%S")
-                    score = find(outcomes[0],"markets/markets/outcomes/outcomes/desc")
-                    score1 = find(outcomes[1],"markets/markets/outcomes/outcomes/desc")
-                    score2 = find(outcomes[2], "markets/markets/outcomes/outcomes/desc")
-                    scores = f"{score}|{score1}|{score2}"
-                    valid = find(outcomes[0], "matchStatus")
-                    event = find(outcomes[0], "markets/markets/desc")
-                    event1 = find(outcomes[1], "markets/markets/desc")
-                    event2 = find(outcomes[2], "markets/markets/desc")
-                    events = f"{event}|{event1}|{event2}"
-                    odd = find(outcomes[0], "markets/markets/outcomes/outcomes/odds")
-                    odd1 = find(outcomes[1], "markets/markets/outcomes/outcomes/odds")
-                    odd2 = find(outcomes[2], "markets/markets/outcomes/outcomes/odds")
-                    calculate_odds = (float(odd)*float(odd1)*float(odd2))
-                    odds = f"{odd}|{odd1}|{odd2}"
-                    total_odd = str(calculate_odds)
-                    last_change = f"{match_odd_changes}||{match_odd_changes1}||{match_odd_changes2}"
+                    for _ in range(number_of_event):
+                        valid = find(outcomes[i], "matchStatus")
+                        timestamp = int(find(outcomes[i], "estimateStartTime"))
+                        odd = find(outcomes[i], "markets/markets/outcomes/outcomes/odds")
+                        sport = (find(outcomes[i], "sport/name"))
+                        types = (find(outcomes[i], "sport/category/name"))
+                        event = find(outcomes[i], "markets/markets/desc")
+                        score = find(outcomes[i], "markets/markets/outcomes/outcomes/desc")
+                        team = team = f"{find(outcomes[i], 'homeTeamName')} vs {find(outcomes[i], 'awayTeamName')}"
+                        change = int(find(outcomes[i], "markets/markets/lastOddsChangeTime"))
+                        lst_change.append(change)
+                        datetimestamp.append(timestamp)
+                        events_status.append(valid)
+                        odds.append(odd)
+                        sports.append(sport)
+                        lst_events.append(event)
+                        lst_scores.append(score)
+                        lst_teams.append(team)
+                        lst_type.append(types)
+                        i += 1
+                    for timestamps in datetimestamp:
+                        s = timestamps / 1000
+                        start = datetime.fromtimestamp(s).date()
+                        start2 = datetime.fromtimestamp(s).time()
+                        match_date.append(start)
+                        lst_match_time.append(start2)
+                    result = 1.0
+                    for odd in odds:
+                        result *= float(odd)
+                    for changes in lst_change:
+                        r = datetime.fromtimestamp(changes / 1000).strftime("%H:%M:%S")
+                        lst_match_oddchanges.append(r)
+                    match_times = "|".join(f"{tmes}" for tmes in lst_match_time)
+                    outcomes = "|".join(f"{sc}" for sc in lst_scores)
+                    events = "|".join(f"{ev}" for ev in lst_events)
+                    var_odd = "|".join(f"{od}" for od in odds)
+                    total_odd = str(result)
+                    total_result = float(result)
+                    change_times = "|".join(f"{chng}" for chng in lst_match_oddchanges)
+                    teams = "|".join(f"{tm}" for tm in lst_teams)
+
+
                 except Exception as ff:
                     print(ff, '1(XML)')
                     return False
 
-                if (
-                        valid in ["Not start", "H1"]
-                        and match_date == today_date
-                        and match_date1 == today_date
-                        and match_date2 == today_date
-                        and types != "Simulated Reality League"
-                        and types1 != "Simulated Reality League"
-                        and types2 != "Simulated Reality League"
-                ):
-                    home1, away1 = find(outcomes[0], "homeTeamName"), find(outcomes[0], "awayTeamName")
-                    home2, away2 = find(outcomes[1], "homeTeamName"), find(outcomes[1], "awayTeamName")
-                    home3, away3 = find(outcomes[2], "homeTeamName"), find(outcomes[2], "awayTeamName")
-                    teams = f"{home1} vs {away1} | {home2} vs {away2}| {home3} vs {away3}"
+                if all(status in ["Not start", "H1"] for status in events_status) and all(
+                        match_start == today_date for match_start in match_date) and all(
+                        stat != "Simulated Reality League" for stat in lst_type) and all(
+                        sportn == "Football" for sportn in sports):
                     init_db()
-                    log_code("XML-TRIPPLE", local_code, session_id, teams, events, scores,match_times,odds,total_odd,last_change)
-                    print("TRIPLE ODD")
-                    return "VALID"
-
+                    if number_of_event == 4 and 100 < total_result < 200:
+                        log_code("XML-QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd,total_odd, change_times)
+                        print("XML-QUADRIPLE ODD")
+                        return "VALID"
+                    elif number_of_event == 3 and 18.00 < total_result < 200:
+                        log_code("XML-TRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd,total_odd, change_times)
+                        print("XML-TRIPLE ODD")
+                        return "VALID"
+                    elif number_of_event == 2 and 25.00 < total_result < 180 and all(outcom == "Correct Score" for outcom in lst_events):
+                        log_code("XML-DOUBLE", local_code, session_id, teams, events, outcomes, match_times, var_odd,total_odd, change_times)
+                        print("XML-DOUBLE ODD")
+                        return "VALID"
+                    elif number_of_event == 1 and 5.00 < total_result < 30 and all(outcom == "Correct Score" for outcom in lst_events):
+                        log_code("XML-SINGLE", local_code, session_id, teams, events, outcomes, match_times, var_odd,total_odd, change_times)
+                        print("XML-SINGLE ODD")
+                        return "VALID"
+                    else:
+                        print("UNSATISFIED")
                 else:
-                    print("HA (XML)")
-                    return "VALID"
-            elif number_of_event == 2:
-
-                try:
-                    types = (find(outcomes[0], "sport/category/name"))
-                    types1 = (find(outcomes[1], "sport/category/name"))
-                    date = int(find(outcomes[0], "estimateStartTime"))
-                    date1 = int(find(outcomes[1], "estimateStartTime"))
-                    match_date = datetime.fromtimestamp(date / 1000).date()
-                    match_date1 = datetime.fromtimestamp(date1 / 1000).date()
-                    match_time = datetime.fromtimestamp(date/1000).time()
-                    match_time1 = datetime.fromtimestamp(date1 / 1000).time()
-                    today_date = datetime.now().date()
-                    match_times = f"{match_time}||{match_time1}"
-                    change = int(find(outcomes[0], "markets/markets/lastOddsChangeTime"))
-                    match_odd_changes = datetime.fromtimestamp(change/1000).strftime("%H:%M:%S")
-                    change1 = int(find(outcomes[1], "markets/markets/lastOddsChangeTime"))
-                    match_odd_changes1 = datetime.fromtimestamp(change1/1000).strftime("%H:%M:%S")
-                    score = find(outcomes[0],"markets/markets/outcomes/outcomes/desc")
-                    score1 = find(outcomes[1],"markets/markets/outcomes/outcomes/desc")
-                    scores = f"{score}|{score1}"
-                    valid = find(outcomes[0], "matchStatus")
-                    odd = find(outcomes[0], "markets/markets/outcomes/outcomes/odds")
-                    odd1 = find(outcomes[1], "markets/markets/outcomes/outcomes/odds")
-                    calculate_odds = (float(odd)*float(odd1))
-                    odds = f"{odd}|{odd1}"
-                    total_odd = str(calculate_odds)
-                    last_change = f"{match_odd_changes}||{match_odd_changes1}"
-                    event = find(outcomes[0], "markets/markets/desc")
-                    event1 = find(outcomes[1], "markets/markets/desc")
-                    events = f"{event}|{event1}"
-                except Exception as ff:
-                    print(ff, '1(XML)')
+                    print(f"FORGET--------{local_code}")
                     return False
-
-                if (
-                        valid in ["Not start", "H1"]
-                        and event == "Correct Score"
-                        and event1 == "Correct Score"
-                        and match_date == today_date
-                        and match_date1 == today_date
-                        and types != "Simulated Reality League"
-                        and types1 != "Simulated Reality League"
-                ):
-                    home1, away1 = find(outcomes[0], "homeTeamName"), find(outcomes[0], "awayTeamName")
-                    home2, away2 = find(outcomes[1], "homeTeamName"), find(outcomes[1], "awayTeamName")
-                    teams = f"{home1} vs {away1} | {home2} vs {away2}"
-                    init_db()
-                    log_code("XML-DOUBLE", local_code, session_id, teams,events,scores,match_times,odds,total_odd,last_change)
-                    print("DOUBLE ODD")
-                    return False
-
-                elif match_date == today_date and match_date1 == today_date and (valid in ["Not start", "H1"]) and calculate_odds > 15.00 and types != "Simulated Reality League"and types1 != "Simulated Reality League":
-                    home1, away1 = find(outcomes[0], "homeTeamName"), find(outcomes[0], "awayTeamName")
-                    home2, away2 = find(outcomes[1], "homeTeamName"), find(outcomes[1], "awayTeamName")
-                    teams = f"{home1} vs {away1} | {home2} vs {away2}"
-                    init_db()
-                    log_code("XML-1X2/H", local_code, session_id, teams,events, scores, match_times, odds, total_odd,last_change)
-                    print("1X2/H")
-                    return False
-                else:
-                    print("HA (XML)")
-
-
-                return "VALID"
-
-            elif number_of_event == 1:
-
-                try:
-                    types = (find(outcomes[0], "sport/category/name"))
-                    date23 = int(find(outcomes[0], "estimateStartTime"))
-                    match_date23 = datetime.fromtimestamp(date23 / 1000).date()
-                    today_date = datetime.now().date()
-                    match_time23 = datetime.fromtimestamp(date23 / 1000).time()
-                    score23 = find(outcomes[0], "markets/markets/outcomes/outcomes/desc")
-                    valid23 = find(outcomes[0], "matchStatus")
-                    event = find(outcomes[0], "markets/markets/desc")
-                    odd2 = find(outcomes[0], "markets/markets/outcomes/outcomes/odds")
-                    odd23 = f"{odd2}"
-                    change23 = int(find(outcomes[0], "markets/markets/lastOddsChangeTime"))
-                    match_odd_changes2 = datetime.fromtimestamp(change23/1000).strftime("%H:%M:%S")
-
-                except Exception as ff3:
-                    print(ff3, '3(XML)')
-                    return False
-
-                if (
-                        valid23 in ["Not start", "H1"]
-                        and event == "Correct Score"
-                        and match_date23 == today_date
-                        and types != "Simulated Reality League"
-
-                ):
-                    home = find(outcomes[0], "homeTeamName")
-                    away = find(outcomes[0], "awayTeamName")
-                    teams = f"{home} vs {away}"
-                    init_db()
-                    log_code("XML-SINGLE", local_code, session_id, teams,event, score23,match_time23,odd23,odd23,match_odd_changes2)
-                    print("SINGLE ODD")
-
-                else:
-                    print("Ha (XML)")
-
-
-                return "VALID"
-            else:
-                
-                print("wow-1 (XML)")
-                return False
 
         except Exception as e:
             print(f"[{session_id}] XML parse error: {e}")
@@ -493,11 +348,9 @@ async def fetch_code(local_code, client, session_id):
         print(resp.text)
         return "ERROR_RETRY"
 
+
 async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, step):
     print(f"[{prefix}] 🚀 Worker {worker_id} started")
-
-    invalid_count = 0
-    counting_enabled = True
 
     # 🔹 split 5th char space
     for i in range(start_index, len(SUFFIX_CHARS), step):
@@ -521,26 +374,12 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
                     return "NEED_CLIENT_RESET"
 
                 if result == "ERROR_RETRY":
-                    await asyncio.sleep(random.uniform(1, 3))
                     continue
-
                 break
 
-            await asyncio.sleep(random.uniform(26, 45))
+    print(f"[{prefix}] ✅ Worker {worker_id} finished normally")
 
-            if counting_enabled:
-                if result == "INVALID":
-                    invalid_count += 1
-                    if invalid_count >= MAX_INITIAL_INVALID:
-                        print(f"[{worker_id}] 🛑 stopped after INVALID limit")
-                        return
 
-                elif result == "VALID":
-                    counting_enabled = False
-                    invalid_count = 0
-                    print(f"[{worker_id}] 🔓 unlocked")
-
-    print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
 
 async def process_prefix(prefix):
     async with PREFIX_SEMAPHORE:
@@ -548,22 +387,17 @@ async def process_prefix(prefix):
 
         while not STOP_EVENT.is_set():
 
-            # 🔑 NEW CLIENT = NEW TLS HANDSHAKE
+            # 🔑 NEW CLIENT = NEW TLS HANDSHAKE AND NO KEEP-ALIVE
             async with httpx.AsyncClient(
-                http2=False,
-                timeout=httpx.Timeout(200.0, connect=50.0),
-                limits=httpx.Limits(
-                    max_connections=68,
-                    max_keepalive_connections=68
-                ),
-                headers={
-                    "User-Agent": random.choice(USER_AGENTS),
-                    "Accept": "application/json, text/plain, */*",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Referer": "https://www.sportybet.com/",
-                    "Origin": "https://www.sportybet.com",
-                    "Connection": "keep-alive",
-                }
+                    http2=True,
+                    timeout=httpx.Timeout(200.0, connect=50.0),
+                    headers={
+                        "User-Agent": random.choice(USER_AGENTS),
+                        "Accept": "application/json, text/plain, */*",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Referer": "https://www.sportybet.com/",
+                        "Origin": "https://www.sportybet.com",
+                    }
             ) as client:
 
                 # 🚀 START ALL WORKERS FOR THIS PREFIX
@@ -616,44 +450,65 @@ async def process_prefix(prefix):
 
         print(f"🏁 PREFIX {prefix} COMPLETED\n")
 
-def log_code(label, code, worker_id, teams, events, score, time,odds,total_odds,last_change,db_name="OUTPUT.db"):
-    conn = sqlite3.connect(db_name)
+async def db_writer(db_name="OUTPUT.db"):
+    conn = sqlite3.connect(db_name, timeout=30)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO codes (
-            worker_id,
-            label,
-            code,
-            teams,
-            events,
-            score,
-            time,
-            odds,
-            total_odds,
-            last_change
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            str(worker_id),
-            str(label),
-            str(code),
-            str(teams),
-            str(events),
-            str(score),
-            str(time),
-            str(odds),
-            str(total_odds),
-            str(last_change),
-        )
-    )
 
-    conn.commit()
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA synchronous=NORMAL;")
+
+    print("🗄️ DB writer started")
+
+    while True:
+        data = await DB_QUEUE.get()
+
+        if data is None:  # shutdown signal
+            break
+
+        try:
+            cursor.execute("""
+                INSERT OR IGNORE INTO codes (
+                    worker_id,
+                    label,
+                    code,
+                    teams,
+                    events,
+                    score,
+                    times,
+                    odds,
+                    total_odds,
+                    last_change
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, data)
+
+            conn.commit()
+            print(f"💾 DB SAVED: {data[2]}")
+
+        except sqlite3.Error as e:
+            print(f"[DB ERROR] {e}")
+
+        DB_QUEUE.task_done()
+
     conn.close()
-    print(f"[Worker {worker_id}] => {label}: {code} ({teams})")
+    print("🗄️ DB writer stopped")
 
-def send_db_via_gmail(sender_email,app_password,recipient_email,db_path="OUTPUT.db"):
+def log_code(label, code, worker_id, teams, events, score, times, odds, total_odds, last_change):
+    DB_QUEUE.put_nowait((
+        worker_id,
+        label,
+        code,
+        teams,
+        events,
+        score,
+        times,
+        odds,
+        total_odds,
+        last_change
+    ))
+
+
+def send_db_via_gmail(sender_email, app_password, recipient_email, db_path="OUTPUT.db"):
     db_file = Path(db_path)
 
     if not db_file.exists():
@@ -680,6 +535,7 @@ def send_db_via_gmail(sender_email,app_password,recipient_email,db_path="OUTPUT.
 
     print("📧 OUTPUT.db sent successfully via Gmail.")
 
+
 async def runtime_watchdog():
     while not STOP_EVENT.is_set():
         if datetime.now() >= END_TIME:
@@ -688,9 +544,10 @@ async def runtime_watchdog():
             return
         await asyncio.sleep(1)
 
+
 async def main_async():
     print("STARTING PREFIX ENGINE")
-
+    db_task = asyncio.create_task(db_writer())
     watchdog_task = asyncio.create_task(runtime_watchdog())
 
     prefix_tasks = [
@@ -705,15 +562,21 @@ async def main_async():
 
     if STOP_EVENT.is_set():
         print("🛑 Cancelling remaining tasks...")
+
+        await DB_QUEUE.put(None)
+        await db_task
+
         for task in pending:
             task.cancel()
 
         await asyncio.gather(*pending, return_exceptions=True)
 
+
 def main():
     try:
         asyncio.run(main_async())
     finally:
+        '''
         # 🔽 CHANGE THESE VALUES
         gmail_sender = "1btcryptopayment@gmail.com"
         gmail_app_password = "zjti bewf hoib dteb"
@@ -725,6 +588,7 @@ def main():
             gmail_receiver,
             "OUTPUT.db"
         )
+        '''
 
 if __name__ == "__main__":
     main()
