@@ -1,4 +1,4 @@
-import sys
+from httpx import ConnectTimeout, ReadTimeout, RequestError
 import httpx
 import asyncio
 import sqlite3
@@ -8,7 +8,7 @@ from email.message import EmailMessage
 from pathlib import Path
 import random
 import time
-sys.stdout.reconfigure(line_buffering=True)
+
 
 MAX_RUNTIME_MINUTES = 355  # ⏱️ CHANGE THIS
 START_TIME = datetime.now()
@@ -25,6 +25,7 @@ def init_db(db_name="OUTPUT.db"):
     cursor.execute("PRAGMA synchronous=NORMAL;")
     cursor.execute("PRAGMA cache_size=-50000;")  # ~50MB memory
     cursor.execute("PRAGMA temp_store=MEMORY;")  # faster
+    cursor.execute("PRAGMA locking_mode=EXCLUSIVE;")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS codes (
             ID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +35,7 @@ def init_db(db_name="OUTPUT.db"):
             Teams TEXT,   -- store teams as string, e.g. "Man Utd vs Chelsea"
             Events TEXT,
             Score TEXT,
-            Times TEXT,
+            Time TEXT,
             Odds TEXT,
             Total_odds TEXT,
             Last_change TEXT,
@@ -45,7 +46,7 @@ def init_db(db_name="OUTPUT.db"):
     conn.close()
 
 
-PREFIXES = ['M2B']
+PREFIXES = ['X1X']
 
 USER_AGENTS = [
     # Desktop browsers
@@ -57,7 +58,6 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (Linux; Android 11; Pixel 4 XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Mobile Safari/537.36",
 ]
-DB_QUEUE = asyncio.Queue()
 
 SUFFIX_CHARS = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
@@ -73,18 +73,17 @@ PREFIX_SEMAPHORE = asyncio.Semaphore(MAX_PARALLEL_PREFIXES)
 FAILED_CODES_FILE = "failed_403_codes.log"
 
 
-def current_timestamp_ms():
-    """
-    Returns the current timestamp in milliseconds.
-    """
-    return int(time.time() * 1000)
-
-
 def save_failed_code(worker_id, code, reason):
     line = f"{datetime.now().isoformat()} | {worker_id} | {code} | {reason}\n"
     with open(FAILED_CODES_FILE, "a", buffering=1) as f:
         f.write(line)
 
+
+def current_timestamp_ms():
+    """
+    Returns the current timestamp in milliseconds.
+    """
+    return int(time.time() * 1000)
 
 async def fetch_code(local_code, client, session_id):
     url = f"https://www.sportybet.com/api/ng/orders/share/{local_code}?_t={current_timestamp_ms()}"
@@ -92,55 +91,50 @@ async def fetch_code(local_code, client, session_id):
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": "en-CA,en;q=0.9",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
-        "Referer": "https://www.sportybet.com/",
+        "Referer": "https://www.sportybet.com/ng/",
         "Origin": "https://www.sportybet.com",
     }
-
-    resp = await client.get(url, headers=headers)
-
+    try:
+        resp = await client.get(url, headers=headers)
+    except ConnectTimeout:
+        print(f"[{session_id}] ⏱️ ConnectTimeout on {local_code}")
+        return "ERROR_TIMEOUT"
+    except ReadTimeout:
+        print(f"[{session_id}] 📥 ReadTimeout on {local_code}")
+        return "ERROR_RETRY"
+    except RequestError as e:
+        print(f"[{session_id}] 🌐 Network error: {e}")
+        return "ERROR_RETRY"
     content_type = resp.headers.get("Content-Type", "")
     text = resp.text.strip()
-
     if resp.status_code == 403:
-        print(f"{resp.status_code}")
         return "ERROR_403"
-
     if resp.status_code != 200:
         print(f"{resp.status_code}")
         return "ERROR_RETRY"
-
     if content_type.startswith("application/json"):
         try:
             response = resp.json()
         except Exception as e:
             print(f"[{session_id}] JSON decode error: {e} | Raw: {text[:200]}")
-
             return True
-
         if not response:
             print("Empty response")
-
             return False
-
-        if response["message"] == 'The code is invalid.':
-            print(response["message"], local_code, "-----B02", str(session_id), flush=True)
+        if not response.get("Success"):
             return "INVALID"
-
-        elif response["message"] == 'Success':
-            pg = response["data"]["outcomes"]
-            number_of_event = len(pg)
-
-            if number_of_event == 0:
-                print("NO-OUTCOME", "-----", str(session_id), flush=True)
+        elif response.get("Success"):
+            pg = response.get("Value")
+            number_of_event = len(pg.get("Events", []))
+            all_events = pg.get("Events", [])
+            if number_of_event > 15:
                 return "VALID"
-
             else:
-
+                i = 0
                 try:
-                    i = 0
                     events_status = []
                     datetimestamp = []
                     match_date = []
@@ -150,21 +144,15 @@ async def fetch_code(local_code, client, session_id):
                     lst_match_time = []
                     lst_scores = []
                     lst_teams = []
-                    lst_change = []
-                    lst_match_oddchanges = []
-                    lst_type = []
                     today_date = datetime.now().date()
                     for _ in range(number_of_event):
-                        valid = pg[i]['matchStatus']
-                        timestamp = int(pg[i]['estimateStartTime'])
-                        odd = (pg[i]["markets"][0]["outcomes"][0]["odds"])
-                        sport = str(pg[i]["sport"]["name"])
-                        types = str(pg[i]["sport"]["category"]["name"])
-                        event = str(pg[i]["markets"][0]["desc"])
-                        score = pg[i]["markets"][0]["outcomes"][0]["desc"]
-                        team = f"{pg[i]['homeTeamName']} vs {pg[i]['awayTeamName']}"
-                        change = int(pg[i]["markets"][0]["lastOddsChangeTime"])
-                        lst_change.append(change)
+                        valid = all_events[i].get("Finish")
+                        timestamp = int(all_events[i].get("Start"))
+                        odd = (all_events[i].get("Coef"))
+                        sport = str(all_events[i].get("SportNameEng"))
+                        event = str(all_events[i].get("GroupName"))
+                        score = all_events[i].get("MarketName")
+                        team = f"{all_events[i].get('Opp1')} vs {all_events[i].get('Opp2')}"
                         datetimestamp.append(timestamp)
                         events_status.append(valid)
                         odds.append(odd)
@@ -172,176 +160,46 @@ async def fetch_code(local_code, client, session_id):
                         lst_events.append(event)
                         lst_scores.append(score)
                         lst_teams.append(team)
-                        lst_type.append(types)
-                        i += 1
+                        i +=1
                     for timestamps in datetimestamp:
-                        s = timestamps/1000
-                        start = datetime.fromtimestamp(s).date()
-                        start2 = datetime.fromtimestamp(s).time()
+                        start = datetime.fromtimestamp(timestamps).date()
+                        start2 = datetime.fromtimestamp(timestamps).time()
                         match_date.append(start)
                         lst_match_time.append(start2)
-                    for changes in lst_change:
-                        r = datetime.fromtimestamp(changes / 1000).strftime("%H:%M:%S")
-                        lst_match_oddchanges.append(r)
-                    result = 1.0
-                    for odd in odds:
-                        result *= float(odd)
-                    match_times = "|".join(f"{tmes}" for tmes in lst_match_time)
+                    result = odds[0]
+                    for i in range(1, len(odds)):
+                        result *= float(odds[i])
+
+                    match_times = "|".join(f"{tmes}"for tmes in lst_match_time)
                     outcomes = "|".join(f"{sc}" for sc in lst_scores)
                     events = "|".join(f"{ev}" for ev in lst_events)
-                    var_odd = "|".join(f"{od}" for od in odds)
+                    var_odd = "|".join(f"{od}"for od in odds)
                     total_odd = str(result)
                     total_result = float(result)
-                    change_times = "|".join(f"{chng}" for chng in lst_match_oddchanges)
-                    teams = "|".join(f"{tm}" for tm in lst_teams)
-
-                except KeyError as ff:
-                    print(ff, '1')
+                except KeyError as e:
+                    print(f"[SKIP] Broken structure in {local_code}: {e}")
+                    i += 1
                     return False
 
-                if all(status in ["Not start","H1"] for status in events_status) and all(match_start == today_date for match_start in match_date) and all(stat != "Simulated Reality League" for stat in lst_type) and all(sportn == "Football" for sportn in sports):
+
+                if all(status == False for status in events_status) and all(match_start == today_date for match_start in match_date) and 80.00 < total_result < 500 and all(sportnames == "Football" for sportnames in sports):
+                    teams = "|".join(f"{tm}"for tm in lst_teams)
                     init_db()
-                    if  number_of_event == 4 and 100.0 < total_result < 200.0:
-                        log_code("QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd,change_times)
-                        print("QUADRIPLE ODD")
-                        return "VALID"
-                    elif number_of_event == 3 and 18.00 < total_result < 200.0:
-                        log_code("TRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd,change_times)
-                        print("TRIPLE ODD")
-                        return "VALID"
-                    elif number_of_event == 2 and 25.00 < total_result < 180.0 and all(outcom == 'Correct Score' for outcom in lst_events):
-                        log_code("DOUBLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd,change_times)
-                        print("DOUBLE ODD")
-                        return "VALID"
-                    elif number_of_event == 1 and 5.00 < total_result < 30.0 and all(outcom == 'Correct Score' for outcom in lst_events):
-                        log_code("SINGLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd,change_times)
-                        print("SINGLE ODD")
-                        return "VALID"
-                    else:
-                        print(f"UNSATISFIED--------{local_code}")
+                    log_code(number_of_event , local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, "NA")
+
+                    print("BAGGED")
+
+                    return "VALID"
+
                 else:
+
                     print(f"FORGET--------{local_code}")
-                    return False
+
+                    return "VALID"
+
         else:
-            print(f"NAHH--------{local_code}")
-
+            print("wow")
             return False
-
-    # ✅ XML fallback with EXACT JSON-like structure
-    elif text.startswith("<BaseRsp"):
-        import xml.etree.ElementTree as ET
-        try:
-            root = ET.fromstring(text)
-            message = root.findtext("message", "")
-            if message != "Success":
-                print(f"{message} {local_code}-----B02", str(session_id), flush=True)
-                return "INVALID"
-
-            outcomes = root.findall(".//data/outcomes/outcomes")
-            if not outcomes:
-                print("No usable XML outcomes")
-
-                return "VALID"
-
-            number_of_event = len(outcomes)
-
-            def find(elem, path):
-                node = elem.find(path)
-                return node.text if node is not None else None
-
-            if number_of_event != 0:
-                try:
-                    i = 0
-                    events_status = []
-                    datetimestamp = []
-                    match_date = []
-                    odds = []
-                    sports = []
-                    lst_events = []
-                    lst_match_time = []
-                    lst_scores = []
-                    lst_teams = []
-                    lst_change = []
-                    lst_match_oddchanges = []
-                    lst_type = []
-                    today_date = datetime.now().date()
-                    for _ in range(number_of_event):
-                        valid = find(outcomes[i], "matchStatus")
-                        timestamp = int(find(outcomes[i], "estimateStartTime"))
-                        odd = find(outcomes[i], "markets/markets/outcomes/outcomes/odds")
-                        sport = (find(outcomes[i], "sport/name"))
-                        types = (find(outcomes[i], "sport/category/name"))
-                        event = find(outcomes[i], "markets/markets/desc")
-                        score = find(outcomes[i], "markets/markets/outcomes/outcomes/desc")
-                        team = team = f"{find(outcomes[i], 'homeTeamName')} vs {find(outcomes[i], 'awayTeamName')}"
-                        change = int(find(outcomes[i], "markets/markets/lastOddsChangeTime"))
-                        lst_change.append(change)
-                        datetimestamp.append(timestamp)
-                        events_status.append(valid)
-                        odds.append(odd)
-                        sports.append(sport)
-                        lst_events.append(event)
-                        lst_scores.append(score)
-                        lst_teams.append(team)
-                        lst_type.append(types)
-                        i += 1
-                    for timestamps in datetimestamp:
-                        s = timestamps / 1000
-                        start = datetime.fromtimestamp(s).date()
-                        start2 = datetime.fromtimestamp(s).time()
-                        match_date.append(start)
-                        lst_match_time.append(start2)
-                    result = 1.0
-                    for odd in odds:
-                        result *= float(odd)
-                    for changes in lst_change:
-                        r = datetime.fromtimestamp(changes / 1000).strftime("%H:%M:%S")
-                        lst_match_oddchanges.append(r)
-                    match_times = "|".join(f"{tmes}" for tmes in lst_match_time)
-                    outcomes = "|".join(f"{sc}" for sc in lst_scores)
-                    events = "|".join(f"{ev}" for ev in lst_events)
-                    var_odd = "|".join(f"{od}" for od in odds)
-                    total_odd = str(result)
-                    total_result = float(result)
-                    change_times = "|".join(f"{chng}" for chng in lst_match_oddchanges)
-                    teams = "|".join(f"{tm}" for tm in lst_teams)
-
-
-                except Exception as ff:
-                    print(ff, '1(XML)')
-                    return False
-
-                if all(status in ["Not start", "H1"] for status in events_status) and all(
-                        match_start == today_date for match_start in match_date) and all(
-                        stat != "Simulated Reality League" for stat in lst_type) and all(
-                        sportn == "Football" for sportn in sports):
-                    init_db()
-                    if number_of_event == 4 and 100 < total_result < 200:
-                        log_code("XML-QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd,total_odd, change_times)
-                        print("XML-QUADRIPLE ODD")
-                        return "VALID"
-                    elif number_of_event == 3 and 18.00 < total_result < 200:
-                        log_code("XML-TRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd,total_odd, change_times)
-                        print("XML-TRIPLE ODD")
-                        return "VALID"
-                    elif number_of_event == 2 and 25.00 < total_result < 180 and all(outcom == "Correct Score" for outcom in lst_events):
-                        log_code("XML-DOUBLE", local_code, session_id, teams, events, outcomes, match_times, var_odd,total_odd, change_times)
-                        print("XML-DOUBLE ODD")
-                        return "VALID"
-                    elif number_of_event == 1 and 5.00 < total_result < 30 and all(outcom == "Correct Score" for outcom in lst_events):
-                        log_code("XML-SINGLE", local_code, session_id, teams, events, outcomes, match_times, var_odd,total_odd, change_times)
-                        print("XML-SINGLE ODD")
-                        return "VALID"
-                    else:
-                        print("UNSATISFIED")
-                else:
-                    print(f"FORGET--------{local_code}")
-                    return False
-
-        except Exception as e:
-            print(f"[{session_id}] XML parse error: {e}")
-            return True
-
     else:
         print(f"[{session_id}] Unrecognized response format")
         print(resp)
@@ -349,13 +207,10 @@ async def fetch_code(local_code, client, session_id):
         return "ERROR_RETRY"
 
 
-async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, step):
-    print(f"[{prefix}] 🚀 Worker {worker_id} started")
+async def fourth_worker(prefix, fourth_char, client, worker_id):
+    print(f"[{prefix}] 🚀 Worker {fourth_char} started")
 
-    # 🔹 split 5th char space
-    for i in range(start_index, len(SUFFIX_CHARS), step):
-        a = SUFFIX_CHARS[i]
-
+    for a in SUFFIX_CHARS:
         if STOP_EVENT.is_set():
             break
 
@@ -368,18 +223,23 @@ async def fourth_worker(prefix, fourth_char, client, worker_id, start_index, ste
             while True:
                 result = await fetch_code(code, client, worker_id)
 
+                # 🔴 CASE 1: HTTP 403 → SAVE + RESET TLS
                 if result == "ERROR_403":
                     save_failed_code(worker_id, code, "403")
-                    print(f"[{worker_id}] 🔄 403 on {code}")
-                    return "NEED_CLIENT_RESET"
-
-                if result == "ERROR_RETRY":
+                    print(f"[{worker_id}] 🔄 403 on {code}, requesting TLS reset")
                     continue
-                break
 
-    print(f"[{prefix}] ✅ Worker {worker_id} finished normally")
+                # 🟡 CASE 2: Retryable error (timeout, parse, etc.)
+                elif result == "ERROR_RETRY" or result == "ERROR_TIMEOUT":
+                    continue  # retry SAME code
+                else:
+                # 🟢 CASE 3: Normal response (VALID / INVALID / others)
+                    break
 
 
+            # If counting is disabled → INVALIDs are ignored forever
+
+    print(f"[{prefix}] ✅ Worker {fourth_char} finished normally")
 
 async def process_prefix(prefix):
     async with PREFIX_SEMAPHORE:
@@ -387,50 +247,26 @@ async def process_prefix(prefix):
 
         while not STOP_EVENT.is_set():
 
-            # 🔑 NEW CLIENT = NEW TLS HANDSHAKE AND NO KEEP-ALIVE
+            # 🔑 NEW CLIENT = NEW TLS HANDSHAKE
             async with httpx.AsyncClient(
-                    http2=True,
-                    timeout=httpx.Timeout(200.0, connect=50.0),
+                    timeout=httpx.Timeout(50.0, connect=50.0),
                     headers={
                         "User-Agent": random.choice(USER_AGENTS),
                         "Accept": "application/json, text/plain, */*",
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Referer": "https://www.sportybet.com/",
+                        "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+                        "Referer": "https://www.sportybet.com/ng/",
                         "Origin": "https://www.sportybet.com",
-                    }
+                    },
+
             ) as client:
 
                 # 🚀 START ALL WORKERS FOR THIS PREFIX
-                tasks = []
-
-                for fourth in SUFFIX_CHARS:
-                    # Worker 0 → even 5th chars
-                    tasks.append(
-                        asyncio.create_task(
-                            fourth_worker(
-                                prefix,
-                                fourth,
-                                client,
-                                f"{prefix}-{fourth}-W0",
-                                start_index=0,
-                                step=2
-                            )
-                        )
+                tasks = [
+                    asyncio.create_task(
+                        fourth_worker(prefix, fourth, client, f"{prefix}-{fourth}")
                     )
-
-                    # Worker 1 → odd 5th chars
-                    tasks.append(
-                        asyncio.create_task(
-                            fourth_worker(
-                                prefix,
-                                fourth,
-                                client,
-                                f"{prefix}-{fourth}-W1",
-                                start_index=1,
-                                step=2
-                            )
-                        )
-                    )
+                    for fourth in SUFFIX_CHARS
+                ]
 
                 # 🧠 WAIT FOR ALL WORKERS TO FINISH
                 results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -438,10 +274,8 @@ async def process_prefix(prefix):
                 # 🔴 CHECK IF ANY WORKER REQUESTED TLS RESET
                 if "NEED_CLIENT_RESET" in results:
                     print(f"[{prefix}] 🔄 403 DETECTED — closing client & sleeping 30s")
-
                     # client is automatically CLOSED here by context manager
                     await asyncio.sleep(30)
-
                     # 🔁 RESTART PREFIX WITH NEW TLS
                     continue
 
@@ -450,62 +284,42 @@ async def process_prefix(prefix):
 
         print(f"🏁 PREFIX {prefix} COMPLETED\n")
 
-async def db_writer(db_name="OUTPUT.db"):
-    conn = sqlite3.connect(db_name, timeout=30)
+def log_code(label, code, worker_id, teams, events, score, time, odds, total_odds, last_change, db_name="OUTPUT.db"):
+    conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO codes (
+            worker_id,
+            label,
+            code,
+            teams,
+            events,
+            score,
+            time,
+            odds,
+            total_odds,
+            last_change
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(worker_id),
+            str(label),
+            str(code),
+            str(teams),
+            str(events),
+            str(score),
+            str(time),
+            str(odds),
+            str(total_odds),
+            str(last_change),
+        )
+    )
 
-    cursor.execute("PRAGMA journal_mode=WAL;")
-    cursor.execute("PRAGMA synchronous=NORMAL;")
-
-    print("🗄️ DB writer started")
-
-    while True:
-        data = await DB_QUEUE.get()
-
-        if data is None:  # shutdown signal
-            break
-
-        try:
-            cursor.execute("""
-                INSERT OR IGNORE INTO codes (
-                    worker_id,
-                    label,
-                    code,
-                    teams,
-                    events,
-                    score,
-                    times,
-                    odds,
-                    total_odds,
-                    last_change
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, data)
-
-            conn.commit()
-            print(f"💾 DB SAVED: {data[2]}")
-
-        except sqlite3.Error as e:
-            print(f"[DB ERROR] {e}")
-
-        DB_QUEUE.task_done()
-
+    conn.commit()
     conn.close()
-    print("🗄️ DB writer stopped")
-
-def log_code(label, code, worker_id, teams, events, score, times, odds, total_odds, last_change):
-    DB_QUEUE.put_nowait((
-        worker_id,
-        label,
-        code,
-        teams,
-        events,
-        score,
-        times,
-        odds,
-        total_odds,
-        last_change
-    ))
+    print(f"[Worker {worker_id}] => {label}: {code} ({teams})")
 
 
 def send_db_via_gmail(sender_email, app_password, recipient_email, db_path="OUTPUT.db"):
@@ -547,7 +361,7 @@ async def runtime_watchdog():
 
 async def main_async():
     print("STARTING PREFIX ENGINE")
-    db_task = asyncio.create_task(db_writer())
+
     watchdog_task = asyncio.create_task(runtime_watchdog())
 
     prefix_tasks = [
@@ -562,10 +376,6 @@ async def main_async():
 
     if STOP_EVENT.is_set():
         print("🛑 Cancelling remaining tasks...")
-
-        await DB_QUEUE.put(None)
-        await db_task
-
         for task in pending:
             task.cancel()
 
@@ -576,19 +386,8 @@ def main():
     try:
         asyncio.run(main_async())
     finally:
-        '''
-        # 🔽 CHANGE THESE VALUES
-        gmail_sender = "1btcryptopayment@gmail.com"
-        gmail_app_password = "zjti bewf hoib dteb"
-        gmail_receiver = "tidianeyonkeu515@gmail.com"
+        pass
 
-        send_db_via_gmail(
-            gmail_sender,
-            gmail_app_password,
-            gmail_receiver,
-            "OUTPUT.db"
-        )
-        '''
 
 if __name__ == "__main__":
     main()
