@@ -273,7 +273,7 @@ async def fetch_code(local_code, client, session_id):
                         types = (find(outcomes[i], "sport/category/name"))
                         event = find(outcomes[i], "markets/markets/desc")
                         score = find(outcomes[i], "markets/markets/outcomes/outcomes/desc")
-                        team = f"{find(outcomes[i], "homeTeamName")} vs {find(outcomes[i], "awayTeamName")}"
+                        team = team = f"{find(outcomes[i], 'homeTeamName')} vs {find(outcomes[i], 'awayTeamName')}"
                         change = int(find(outcomes[i], "markets/markets/lastOddsChangeTime"))
                         lst_change.append(change)
                         datetimestamp.append(timestamp)
