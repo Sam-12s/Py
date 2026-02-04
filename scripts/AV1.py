@@ -398,8 +398,8 @@ async def process_prefix(prefix):
                         "Accept-Language": "en-US,en;q=0.9",
                         "Referer": "https://www.sportybet.com/en",
                         "Origin": "https://www.sportybet.com",
-                        "X - Forwarded - For": "186.136.25.000"
-                    }
+                    },
+                    verify=False
             ) as client:
 
                 # 🚀 START ALL WORKERS FOR THIS PREFIX
