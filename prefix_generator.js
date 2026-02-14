@@ -1,21 +1,17 @@
 // ================================
 // BLOCK 1 — IMPORTS & CONFIG
 // ================================
-import { request, Agent } from "undici";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
+const { request, Agent } = require("undici");
+const fs = require("fs");
+const path = require("path");
 
-// Required for __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// In CommonJS, __dirname already exists
 const agent = new Agent({
     connections: 100,        // connection pool
     pipelining: 1,
     keepAliveTimeout: 10_000,
     keepAliveMaxTimeout: 60_000
 });
-
 // 🔥 CONTROL HOW MANY PREFIXES YOU WANT
 const TOTAL_PREFIXES_TARGET = 50;
 
