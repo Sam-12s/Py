@@ -1,15 +1,14 @@
-name: Prefix + Scrapers Pipeline
+name: Prefix Generator
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # manual run
 
 permissions:
-  contents: write
+  contents: write      # allow committing
 
 jobs:
-  prefix-generator:
+  update-prefixes:
     runs-on: ubuntu-latest
-
 
     steps:
       - name: Checkout repo
@@ -35,28 +34,3 @@ jobs:
           git add .
           git commit -m "Update prefixes" || echo "No changes"
           git push
-
-  scrapers:
-    needs: prefix-generator
-    runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        scraper: [scrapper.js]
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install dependencies
-        run: |
-          npm install
-          npx playwright install chromium
-
-      - name: Run scraper
-        run: node --max-old-space-size=5120 ${{ matrix.scraper }}
