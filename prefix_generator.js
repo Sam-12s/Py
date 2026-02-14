@@ -13,7 +13,7 @@ const agent = new Agent({
     keepAliveMaxTimeout: 60_000
 });
 // 🔥 CONTROL HOW MANY PREFIXES YOU WANT
-const TOTAL_PREFIXES_TARGET = 50;
+const TOTAL_PREFIXES_TARGET = 10;
 
 // Prefix storage
 let PREFIXES = [];
