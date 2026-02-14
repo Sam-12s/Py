@@ -1,14 +1,21 @@
-name: Prefix + Scrapers Pipeline
+name: Update then Run Scrapers
 
 on:
-  workflow_dispatch:   # manual run only
+  workflow_dispatch:
 
 jobs:
-  prefix-generator:
+
+  # =========================
+  # JOB 1 — UPDATE PREFIXES
+  # =========================
+  update:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -16,7 +23,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependencies
+      - name: Install dependencies (update job)
         run: |
           npm install
           npx playwright install chromium
@@ -24,35 +31,50 @@ jobs:
       - name: Run prefix generator
         run: node prefix_generator.js
 
-      - name: Commit updated prefixes
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-          git add .
-          git commit -m "Update prefixes" || echo "No changes"
-          git push
+      - name: Upload updated scrappers
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-scrappers
+          path: |
+            scrapper.js
 
-  scrapers:
-    needs: prefix-generator
+
+  # =========================
+  # JOB 2 — RUN SCRAPPERS
+  # =========================
+  run_scrappers:
+    needs: update
     runs-on: ubuntu-latest
 
     strategy:
+      max-parallel: 18
       matrix:
-        scraper: [scrapper.js]
+        scraper: [1]
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download updated scrappers
+        uses: actions/download-artifact@v4
+        with:
+          name: updated-scrappers
+          path: .
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install dependencies
+      - name: Install dependencies (scraper job)
         run: |
           npm install
           npx playwright install chromium
 
-      - name: Run scraper
-        run: node --max-old-space-size=5120 ${{ matrix.scraper }}
+      # 🧪 SAFETY CHECK
+      - name: Show PREFIXES used
+        run: |
+          grep -n "const PREFIXES" scrapper${{ matrix.scraper }}.js | head -n 1
+
+      - name: Run scrapper${{ matrix.scraper }}
+        run: node --max-old-space-size=4096 scrapper${{ matrix.scraper }}.js
