@@ -36,7 +36,7 @@ jobs:
         with:
           name: updated-scrappers
           path: |
-            scrapper.js
+            scrapper1.js
 
 
   # =========================
