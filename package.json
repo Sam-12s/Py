@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Prefix generator and Playwright scrapers",
   "main": "prefix_generator.js",
-  "type": "module",
   "scripts": {
     "start": "node prefix_generator.js"
   },
