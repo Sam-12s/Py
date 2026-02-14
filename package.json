@@ -1,0 +1,15 @@
+{
+  "name": "prefix-scrapers-pipeline",
+  "version": "1.0.0",
+  "description": "Prefix generator and Playwright scrapers",
+  "main": "prefix_generator.js",
+  "scripts": {
+    "start": "node prefix_generator.js"
+  },
+  "dependencies": {
+    "undici": "^6.18.1",
+    "playwright": "^1.42.0",
+    "better-sqlite3": "^9.4.0",
+    "nodemailer": "^6.9.13"
+  }
+}
