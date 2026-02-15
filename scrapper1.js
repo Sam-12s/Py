@@ -1,7 +1,7 @@
 const MAX_CONTEXTS = 50;        // real concurrency
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
-const MAX_RUNTIME_MINUTES = 345;
+const MAX_RUNTIME_MINUTES = 355;
 let REQUEST_COUNTER = 0;
 const RESTART_THRESHOLD = 2500;
 let RESTARTING = false;
@@ -351,7 +351,7 @@ async function fetchCode(ctx, code, state) {
     }
 
     // ✅ success
-    logStatus(code, 200);
+    
 
     try {
       const jsonObj = await resp.json();
