@@ -37,6 +37,23 @@ jobs:
           name: updated-scrappers
           path: |
             scrapper1.js
+            scrapper2.js
+            scrapper3.js
+            scrapper4.js
+            scrapper5.js
+            scrapper6.js
+            scrapper7.js
+            scrapper8.js
+            scrapper9.js
+            scrapper10.js
+            scrapper11.js
+            scrapper12.js
+            scrapper13.js
+            scrapper14.js
+            scrapper15.js
+            scrapper16.js
+            scrapper17.js
+            scrapper18.js
 
 
   # =========================
@@ -49,7 +66,7 @@ jobs:
     strategy:
       max-parallel: 18
       matrix:
-        scraper: [1]
+        scraper: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18]
 
     steps:
       - name: Checkout repository
