@@ -14,8 +14,6 @@ const BLOCKED_QUEUE = new Set();
 const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
 const xml2js = require("xml2js");
-const { chromium } = require("playwright");
-
 let STOP_FLAG = false;
 let BLOCKED_CODE = null;
 let DEBUG_COUNTER = 0;
