@@ -13,6 +13,8 @@ let IN_FLIGHT = 0;
 const BLOCKED_QUEUE = new Set();
 const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
+const xml2js = require("xml2js");
+const { chromium } = require("playwright");
 
 let STOP_FLAG = false;
 let BLOCKED_CODE = null;
@@ -353,12 +355,92 @@ async function fetchCode(ctx, code, state) {
     // ✅ success
     
 
-    try {
-      const jsonObj = await resp.json();
-      await processResponse(jsonObj, code, "JS");
-    } catch (err) {
-      console.log(`[${code}] JSON parse failed: ${err.message}`);
-    } finally {
+try {
+    const contentType = resp.headers()["content-type"] || "";
+    const text = await resp.text();
+
+    // ==========================
+    // JSON RESPONSE
+    // ==========================
+    if (contentType.includes("application/json")) {
+        let jsonObj;
+        try {
+            jsonObj = JSON.parse(text);
+        } catch (e) {
+            console.log(`[${code}] JSON parse error`);
+            return;
+        }
+
+        await processResponse(jsonObj, code, "JS");
+        return;
+    }
+
+    // ==========================
+    // XML RESPONSE (Python Equivalent)
+    // ==========================
+    if (text.startsWith("<BaseRsp")) {
+
+        const parser = new xml2js.Parser({
+            explicitArray: false,
+            mergeAttrs: true
+        });
+
+        let result;
+        try {
+            result = await parser.parseStringPromise(text);
+        } catch (err) {
+            console.log(`[${code}] XML parse failed`);
+            return;
+        }
+
+        const message = result?.BaseRsp?.message;
+        if (message !== "Success") {
+            return;
+        }
+
+        let outcomes = result?.BaseRsp?.data?.outcomes?.outcomes;
+        if (!outcomes) return;
+
+        if (!Array.isArray(outcomes)) {
+            outcomes = [outcomes];
+        }
+
+        // Convert XML structure to JSON-like format
+        const normalized = {
+            message: "Success",
+            data: {
+                outcomes: outcomes.map(o => ({
+                    matchStatus: o.matchStatus,
+                    estimateStartTime: Number(o.estimateStartTime),
+                    homeTeamName: o.homeTeamName,
+                    awayTeamName: o.awayTeamName,
+                    sport: {
+                        name: o?.sport?.name,
+                        category: {
+                            name: o?.sport?.category?.name
+                        }
+                    },
+                    markets: [{
+                        desc: o?.markets?.markets?.desc,
+                        lastOddsChangeTime: Number(o?.markets?.markets?.lastOddsChangeTime),
+                        outcomes: [{
+                            desc: o?.markets?.markets?.outcomes?.outcomes?.desc,
+                            odds: Number(o?.markets?.markets?.outcomes?.outcomes?.odds)
+                        }]
+                    }]
+                }))
+            }
+        };
+
+        await processResponse(normalized, code, "XML");
+        return;
+    }
+
+    console.log(`[${code}] Unknown response format`);
+} catch (err) {
+    console.log(`[${code}] Response handling error: ${err.message}`);
+}
+finally {
       try { resp.dispose?.(); } catch {}
     }
 
