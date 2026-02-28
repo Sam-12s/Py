@@ -141,8 +141,8 @@ jobs:
 # ---------- PUSH TO A5 (46–54) ----------
       - name: Push to A5
         run: |
-          git clone https://x-access-token:${{ secrets.A5_TOKEN }}@github.com/A5_USERNAME/scraper-runner.git a5
-          cp scrapper{46..54}.js a5/
+          git clone https://x-access-token:${{ secrets.A5_TOKEN }}@github.com/zorroo12/scraper-runner.git a5
+          cp scrapper{51..58}.js a5/
           cd a5
           git config user.name "auto-bot"
           git config user.email "bot@auto.com"
@@ -155,7 +155,7 @@ jobs:
           curl -X POST \
           -H "Authorization: Bearer ${{ secrets.A5_TOKEN }}" \
           -H "Accept: application/vnd.github+json" \
-          https://api.github.com/repos/A5_USERNAME/scraper-runner/dispatches \
+          https://api.github.com/repos/zorroo12/scraper-runner/dispatches \
           -d '{"event_type":"run_scrappers"}'
 
 # ---------- PUSH TO A6 (55–63) ----------
