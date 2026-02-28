@@ -19,7 +19,12 @@ const TOTAL_PREFIXES_TARGET = 26;
 let PREFIXES = [];
 
 // Worker file path (example target file)
-const WORKER_FILES = ["scrapper1.js","scrapper2.js","scrapper3.js","scrapper4.js","scrapper5.js","scrapper6.js","scrapper7.js","scrapper8.js","scrapper9.js","scrapper10.js","scrapper11.js","scrapper12.js","scrapper13.js","scrapper14.js","scrapper15.js","scrapper16.js","scrapper17.js","scrapper18.js"];
+const TOTAL_SCRAPPERS = 63;
+
+const WORKER_FILES = Array.from(
+  { length: TOTAL_SCRAPPERS },
+  (_, i) => `scrapper${i + 1}.js`
+);
 const TOTAL_PREFIXES_NEEDED =TOTAL_PREFIXES_TARGET * WORKER_FILES.length;
 
 // ================================
