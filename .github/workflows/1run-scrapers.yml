@@ -81,7 +81,7 @@ jobs:
 # ---------- PUSH TO A2 (19–27) ----------
       - name: Push to A2
         run: |
-          git clone https://x-access-token:${{ secrets.A2_TOKEN }}@github.com/A2_USERNAME/scraper-runner.git a2
+          git clone https://x-access-token:${{ secrets.A2_TOKEN }}@github.com/monstergabriel25-gif/scraper-runner.git a2
           cp scrapper{19..27}.js a2/
           cd a2
           git config user.name "auto-bot"
@@ -95,7 +95,7 @@ jobs:
           curl -X POST \
           -H "Authorization: Bearer ${{ secrets.A2_TOKEN }}" \
           -H "Accept: application/vnd.github+json" \
-          https://api.github.com/repos/A2_USERNAME/scraper-runner/dispatches \
+          https://api.github.com/repos/monstergabriel25-gif/scraper-runner/dispatches \
           -d '{"event_type":"run_scrappers"}'
 
 # ---------- PUSH TO A3 (28–36) ----------
