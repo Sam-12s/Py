@@ -121,8 +121,8 @@ jobs:
 # ---------- PUSH TO A4 (37–45) ----------
       - name: Push to A4
         run: |
-          git clone https://x-access-token:${{ secrets.A4_TOKEN }}@github.com/A4_USERNAME/scraper-runner.git a4
-          cp scrapper{37..45}.js a4/
+          git clone https://x-access-token:${{ secrets.A4_TOKEN }}@github.com/samy54-byte/scraper-runner.git a4
+          cp scrapper{39..50}.js a4/
           cd a4
           git config user.name "auto-bot"
           git config user.email "bot@auto.com"
@@ -135,7 +135,7 @@ jobs:
           curl -X POST \
           -H "Authorization: Bearer ${{ secrets.A4_TOKEN }}" \
           -H "Accept: application/vnd.github+json" \
-          https://api.github.com/repos/A4_USERNAME/scraper-runner/dispatches \
+          https://api.github.com/repos/samy54-byte/scraper-runner/dispatches \
           -d '{"event_type":"run_scrappers"}'
 
 # ---------- PUSH TO A5 (46–54) ----------
