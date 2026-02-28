@@ -5,26 +5,20 @@ on:
 
 jobs:
 
-  # =========================
-  # JOB 1 — UPDATE PREFIXES
-  # =========================
+# =========================
+# JOB 1 — UPDATE PREFIXES
+# =========================
   update:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install dependencies (update job)
-        run: |
+      - run: |
           npm install
           npx playwright install chromium
 
@@ -35,31 +29,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: updated-scrappers
-          path: |
-            scrapper1.js
-            scrapper2.js
-            scrapper3.js
-            scrapper4.js
-            scrapper5.js
-            scrapper6.js
-            scrapper7.js
-            scrapper8.js
-            scrapper9.js
-            scrapper10.js
-            scrapper11.js
-            scrapper12.js
-            scrapper13.js
-            scrapper14.js
-            scrapper15.js
-            scrapper16.js
-            scrapper17.js
-            scrapper18.js
+          path: scrapper*.js
 
 
-  # =========================
-  # JOB 2 — RUN SCRAPPERS
-  # =========================
-  run_scrappers:
+# =========================
+# JOB 2 — RUN A1 SCRAPPERS (1–18)
+# =========================
+  run_A1:
     needs: update
     runs-on: ubuntu-latest
 
@@ -69,29 +45,135 @@ jobs:
         scraper: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18]
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download updated scrappers
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: updated-scrappers
           path: .
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install dependencies (scraper job)
-        run: |
+      - run: |
           npm install
           npx playwright install chromium
 
-      # 🧪 SAFETY CHECK
-      - name: Show PREFIXES used
-        run: |
-          grep -n "const PREFIXES" scrapper${{ matrix.scraper }}.js | head -n 1
+      - run: node --max-old-space-size=4096 scrapper${{ matrix.scraper }}.js
 
-      - name: Run scrapper${{ matrix.scraper }}
-        run: node --max-old-space-size=4096 scrapper${{ matrix.scraper }}.js
+
+# =========================
+# JOB 3 — DISTRIBUTE TO OTHER ACCOUNTS
+# =========================
+  distribute:
+    needs: update
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: updated-scrappers
+          path: .
+
+# ---------- PUSH TO A2 (19–27) ----------
+      - name: Push to A2
+        run: |
+          git clone https://x-access-token:${{ secrets.A2_TOKEN }}@github.com/A2_USERNAME/scraper-runner.git a2
+          cp scrapper{19..27}.js a2/
+          cd a2
+          git config user.name "auto-bot"
+          git config user.email "bot@auto.com"
+          git add .
+          git commit -m "Update prefixes"
+          git push
+
+      - name: Trigger A2
+        run: |
+          curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.A2_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/A2_USERNAME/scraper-runner/dispatches \
+          -d '{"event_type":"run_scrappers"}'
+
+# ---------- PUSH TO A3 (28–36) ----------
+      - name: Push to A3
+        run: |
+          git clone https://x-access-token:${{ secrets.A3_TOKEN }}@github.com/A3_USERNAME/scraper-runner.git a3
+          cp scrapper{28..36}.js a3/
+          cd a3
+          git config user.name "auto-bot"
+          git config user.email "bot@auto.com"
+          git add .
+          git commit -m "Update prefixes"
+          git push
+
+      - name: Trigger A3
+        run: |
+          curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.A3_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/A3_USERNAME/scraper-runner/dispatches \
+          -d '{"event_type":"run_scrappers"}'
+
+# ---------- PUSH TO A4 (37–45) ----------
+      - name: Push to A4
+        run: |
+          git clone https://x-access-token:${{ secrets.A4_TOKEN }}@github.com/A4_USERNAME/scraper-runner.git a4
+          cp scrapper{37..45}.js a4/
+          cd a4
+          git config user.name "auto-bot"
+          git config user.email "bot@auto.com"
+          git add .
+          git commit -m "Update prefixes"
+          git push
+
+      - name: Trigger A4
+        run: |
+          curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.A4_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/A4_USERNAME/scraper-runner/dispatches \
+          -d '{"event_type":"run_scrappers"}'
+
+# ---------- PUSH TO A5 (46–54) ----------
+      - name: Push to A5
+        run: |
+          git clone https://x-access-token:${{ secrets.A5_TOKEN }}@github.com/A5_USERNAME/scraper-runner.git a5
+          cp scrapper{46..54}.js a5/
+          cd a5
+          git config user.name "auto-bot"
+          git config user.email "bot@auto.com"
+          git add .
+          git commit -m "Update prefixes"
+          git push
+
+      - name: Trigger A5
+        run: |
+          curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.A5_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/A5_USERNAME/scraper-runner/dispatches \
+          -d '{"event_type":"run_scrappers"}'
+
+# ---------- PUSH TO A6 (55–63) ----------
+      - name: Push to A6
+        run: |
+          git clone https://x-access-token:${{ secrets.A6_TOKEN }}@github.com/A6_USERNAME/scraper-runner.git a6
+          cp scrapper{55..63}.js a6/
+          cd a6
+          git config user.name "auto-bot"
+          git config user.email "bot@auto.com"
+          git add .
+          git commit -m "Update prefixes"
+          git push
+
+      - name: Trigger A6
+        run: |
+          curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.A6_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/A6_USERNAME/scraper-runner/dispatches \
+          -d '{"event_type":"run_scrappers"}'
