@@ -37,7 +37,6 @@ jobs:
   run_A1:
     needs: update
     runs-on: ubuntu-latest
-
     strategy:
       max-parallel: 18
       matrix:
@@ -45,24 +44,29 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           name: updated-scrappers
           path: .
 
-      - name: Create service account file
-        run: echo '${{ secrets.GDRIVE_KEY }}' > service-account.json
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install Playwright
-        run: npx playwright install chromium
+      - name: Install dependencies
+        run: |
+          npm install
+          npx playwright install chromium
 
-      - name: Run scraper
-        run: node --max-old-space-size=4096 scrapper${{ matrix.scraper }}.js
+      - name: Run scraper & upload DB
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+        run: |
+          node --max-old-space-size=4096 scrapper${{ matrix.scraper }}.js
+          node uploadDbOAuth.js
 
   # =========================
   # JOB 3 — DISTRIBUTE TO OTHER ACCOUNTS
