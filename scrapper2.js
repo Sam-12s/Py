@@ -763,7 +763,7 @@ const { chromium } = require("playwright");
 
   try {
     const PREFIXES = [
-    "VDW",
+    "ST5",
 ];
 
     const state = {};
