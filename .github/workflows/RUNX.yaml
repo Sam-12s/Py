@@ -1,28 +1,38 @@
-name: Run XB Scripts
+name: Update then Run Scrapers
 
 on:
   workflow_dispatch:
 
 jobs:
-  run_avs:
+
+# =========================
+# JOB 1 — UPDATE PREFIXES
+# =========================
+  run_A1:
     runs-on: ubuntu-latest
 
     strategy:
       max-parallel: 18
       matrix:
-        av: [1]
+        scraper: [1,2]
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/download-artifact@v4
         with:
-          python-version: "3.11"
+          name: updated-scrappers
+          path: .
+      
+      - name: Create service account file
+        run: echo '${{ secrets.GDRIVE_KEY }}' > service-account.json
+        
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt || pip install httpx
+      - run: |
+          npm install
+          npx playwright install chromium
 
-      - name: Run AV${{ matrix.av }}
-        run: python scripts/XB${{ matrix.av }}.py
+      - run: node --max-old-space-size=4096 scrapper${{ matrix.scraper }}.js
