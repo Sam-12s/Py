@@ -763,7 +763,7 @@ const { chromium } = require("playwright");
 
   try {
     const PREFIXES = [
-    "Y4X",
+    "RH3",
 ];
 
     const state = {};
