@@ -124,7 +124,6 @@ if (!isMainThread && workerData === "DB_WORKER") {
       return;
     }
     buffer.push(msg);
-    if (buffer.length >= 500) flush();
   });
 
   setInterval(flush, 200);
@@ -793,7 +792,6 @@ const { chromium } = require("playwright");
   await new Promise(r => setTimeout(r, 1000));
 
   await uploadDbToDrive();
-
   process.exit(0);
 }
 })();
