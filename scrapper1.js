@@ -55,7 +55,7 @@ async function uploadDbToDrive() {
 
   const fileMetadata = {
     name: `output_${Date.now()}.db`,
-    parents: ["YOUR_FOLDER_ID"]
+    parents: ["1GJ13uUpHRvY0uEAZbXbhL4S1YNTjU7NR"]
   };
 
   const media = {
