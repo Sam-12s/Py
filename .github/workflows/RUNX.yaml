@@ -17,12 +17,6 @@ jobs:
         scraper: [1,2]
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: updated-scrappers
-          path: .
       
       - name: Create service account file
         run: echo '${{ secrets.GDRIVE_KEY }}' > service-account.json
