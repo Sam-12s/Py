@@ -40,22 +40,22 @@ const fs = require("fs");
 
 async function uploadDbToDrive() {
   const dbPath = "OUTPUT.db";
+  if (!fs.existsSync(dbPath)) return;
 
-  if (!fs.existsSync(dbPath)) {
-    console.log("No OUTPUT.db found.");
-    return;
-  }
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GDRIVE_CLIENT_ID,
+    process.env.GDRIVE_CLIENT_SECRET
+  );
 
-  const auth = new google.auth.GoogleAuth({
-    keyFile: "service-account.json",   // your service account file
-    scopes: ["https://www.googleapis.com/auth/drive.file"]
+  oauth2Client.setCredentials({
+    refresh_token: process.env.GDRIVE_REFRESH_TOKEN
   });
 
-  const drive = google.drive({ version: "v3", auth });
+  const drive = google.drive({ version: "v3", auth: oauth2Client });
 
   const fileMetadata = {
     name: `output_${Date.now()}.db`,
-    parents: ["1GJ13uUpHRvY0uEAZbXbhL4S1YNTjU7NR"]
+    parents: ["1GJ13uUpHRvY0uEAZbXbhL4S1YNTjU7NR"]  // Optional: put in a folder
   };
 
   const media = {
@@ -69,9 +69,8 @@ async function uploadDbToDrive() {
     fields: "id"
   });
 
-  console.log("✅ Database uploaded to Google Drive");
+  console.log("✅ Database uploaded to My Drive");
 }
-
 const { Worker, isMainThread, parentPort, workerData } = require("worker_threads");
 
 if (!isMainThread && workerData === "DB_WORKER") {
@@ -125,7 +124,6 @@ if (!isMainThread && workerData === "DB_WORKER") {
       return;
     }
     buffer.push(msg);
-    if (buffer.length >= 500) flush();
   });
 
   setInterval(flush, 200);
@@ -763,7 +761,7 @@ const { chromium } = require("playwright");
 
   try {
     const PREFIXES = [
-    "G1U",
+    "GH3",
 ];
 
     const state = {};
@@ -794,9 +792,6 @@ const { chromium } = require("playwright");
   await new Promise(r => setTimeout(r, 1000));
 
   await uploadDbToDrive();
-
   process.exit(0);
 }
 })();
-
-
