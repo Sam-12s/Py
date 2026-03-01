@@ -5,9 +5,6 @@ on:
 
 jobs:
 
-# =========================
-# JOB 1 — UPDATE PREFIXES
-# =========================
   run_A1:
     runs-on: ubuntu-latest
 
@@ -17,16 +14,27 @@ jobs:
         scraper: [1,2]
 
     steps:
-      
-      - name: Create service account file
-        run: echo '${{ secrets.GDRIVE_KEY }}' > service-account.json
-        
+      # ✅ Checkout code
+      - uses: actions/checkout@v4
+
+      # ✅ Node setup
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - run: |
+      # ✅ Install dependencies & Playwright
+      - name: Install dependencies
+        run: |
           npm install
           npx playwright install chromium
 
-      - run: node --max-old-space-size=4096 scrapper${{ matrix.scraper }}.js
+      # ✅ Run scraper & upload DB to Google Drive
+      - name: Run scraper & upload DB
+        env:
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+        run: |
+          node --max-old-space-size=4096 scrapper${{ matrix.scraper }}.js
+          node uploadDbOAuth.js
