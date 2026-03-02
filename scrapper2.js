@@ -761,7 +761,7 @@ const { chromium } = require("playwright");
 
   try {
     const PREFIXES = [
-    "GH3",
+    "RH3",
 ];
 
     const state = {};
@@ -795,3 +795,5 @@ const { chromium } = require("playwright");
   process.exit(0);
 }
 })();
+
+
