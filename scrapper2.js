@@ -54,7 +54,7 @@ async function uploadDbToDrive() {
   const drive = google.drive({ version: "v3", auth: oauth2Client });
 
   const fileMetadata = {
-    name: `output_${Date.now()}.db`,
+    name: "OUTPUT.db",
     parents: ["1GJ13uUpHRvY0uEAZbXbhL4S1YNTjU7NR"]  // Optional: put in a folder
   };
 
