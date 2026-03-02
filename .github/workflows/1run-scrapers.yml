@@ -66,7 +66,7 @@ jobs:
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
         run: |
           node --max-old-space-size=4096 scrapper${{ matrix.scraper }}.js
-          node uploadDbOAuth.js
+
 
 # =========================
 # JOB 3 — DISTRIBUTE TO OTHER ACCOUNTS
