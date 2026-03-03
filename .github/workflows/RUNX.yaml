@@ -1,4 +1,4 @@
-name: Update then Run Scrapers1
+name: TOR TEST
 
 on:
   workflow_dispatch:
@@ -27,6 +27,12 @@ jobs:
         run: |
           npm install
           npx playwright install chromium
+      - name: Install Tor
+        run: |
+          sudo apt update
+          sudo apt install tor -y
+          sudo service tor start
+          sleep 5
 
       # ✅ Run scraper & upload DB to Google Drive
       - name: Run scraper & upload DB
