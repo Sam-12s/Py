@@ -706,10 +706,10 @@ async function stopAllWorkers(state) {
 }
 function rotateTor() {
   try {
-    execSync("sudo kill -HUP $(pidof tor)");
+    execSync("kill -HUP $(pidof tor)", { stdio: "ignore" });
     console.log("🔄 Tor NEWNYM signal sent");
   } catch (err) {
-    console.log("❌ Tor rotation failed:", err.message);
+    console.log("⚠️ Tor rotation skipped (likely not permitted)");
   }
 }
 async function fullTorRotation(state) {
@@ -859,7 +859,18 @@ const { chromium } = require("playwright");
 
 (async () => {
 
-  
+  console.log("🔥 MAIN STARTED");
+  try {
+  const test = await chromium.launch({
+    headless: true,
+    proxy: { server: "socks5://127.0.0.1:9050" }
+  });
+
+  console.log("🧅 Tor proxy connection OK");
+  await test.close();
+} catch (err) {
+  console.log("❌ Tor connection failed:", err.message);
+}
 
   try {
     const PREFIXES = [
