@@ -11,7 +11,7 @@ jobs:
     strategy:
       max-parallel: 18
       matrix:
-        scraper: [1,2]
+        scraper: [1]
 
     steps:
       # ✅ Checkout code
