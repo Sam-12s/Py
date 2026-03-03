@@ -878,8 +878,10 @@ const { chromium } = require("playwright");
 ];
 
     const state = {};
+    
     runtimeWatchdog(state);
-    await chromium.launch({
+    
+    state.browser = await chromium.launch({
       headless: true,
       proxy: TOR_PROXY,
       args: [
@@ -887,10 +889,10 @@ const { chromium } = require("playwright");
         "--no-sandbox"
       ]
     });
-
+    
     state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
     await state.pool.init();
-    //setInterval(() => {fullTorRotation(state).catch(err =>console.log("Rotation error:", err.message));}, 60000);
+    setInterval(() => {fullTorRotation(state).catch(err =>console.log("Rotation error:", err.message));}, 60000);
 
 
     for (const prefix of PREFIXES) {
