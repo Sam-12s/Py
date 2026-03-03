@@ -890,7 +890,7 @@ const { chromium } = require("playwright");
 
     state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
     await state.pool.init();
-    setInterval(() => {fullTorRotation(state).catch(err =>console.log("Rotation error:", err.message));}, 60000);
+    //setInterval(() => {fullTorRotation(state).catch(err =>console.log("Rotation error:", err.message));}, 60000);
 
 
     for (const prefix of PREFIXES) {
