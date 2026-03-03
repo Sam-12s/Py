@@ -26,7 +26,11 @@ let stats = {
 };
 
 let GLOBAL_PAUSE = false;
+const { execSync } = require("child_process");
 
+const TOR_PROXY = {
+  server: "socks5://127.0.0.1:9050"
+};
 
 async function waitIfPaused() {
   if (!GLOBAL_PAUSE) return;
@@ -304,9 +308,6 @@ class ContextPool {
   return ctx;
 }
 
-
-
-
   release(ctx) {
     this.queue.push(ctx);
   }
@@ -394,7 +395,7 @@ async function fetchCode(ctx, code, state) {
     }
 
     // ✅ success
-    
+    logStatus(code, 200);
 
 try {
     const contentType = resp.headers()["content-type"] || "";
@@ -703,7 +704,66 @@ async function stopAllWorkers(state) {
   console.log("⏳ Final grace wait for late responses (2s)...");
   await new Promise(r => setTimeout(r, 2000));
 }
+function rotateTor() {
+  try {
+    execSync("sudo kill -HUP $(pidof tor)");
+    console.log("🔄 Tor NEWNYM signal sent");
+  } catch (err) {
+    console.log("❌ Tor rotation failed:", err.message);
+  }
+}
+async function fullTorRotation(state) {
+  if (HARD_SHUTDOWN) return;
 
+  console.log("\n🧅 === TOR FULL ROTATION START ===\n");
+
+  // 1️⃣ Freeze world
+  GLOBAL_PAUSE = true;
+  STOP_FLAG = true;
+
+  // 2️⃣ Wait for all active requests
+  while (IN_FLIGHT > 0) {
+    await new Promise(r => setTimeout(r, 20));
+  }
+
+  console.log("🧊 All in-flight requests done");
+
+  // 3️⃣ Invalidate contexts
+  POOL_GENERATION++;
+
+  // 4️⃣ Close browser & pool
+  try { await state.pool.close(); } catch {}
+  try { await state.browser.close(); } catch {}
+
+  console.log("♻️ Browser destroyed");
+
+  // 5️⃣ Rotate Tor identity
+  rotateTor();
+
+  // Wait for Tor to establish new circuit
+  await new Promise(r => setTimeout(r, 8000));
+
+  // 6️⃣ Recreate browser
+  state.browser = await chromium.launch({
+    headless: true,
+    proxy: TOR_PROXY,
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox"
+    ]
+  });
+
+  state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
+  await state.pool.init();
+
+  console.log("✅ New browser ready with new Tor IP");
+
+  // 7️⃣ Resume world
+  STOP_FLAG = false;
+  GLOBAL_PAUSE = false;
+
+  console.log("\n🧅 === TOR ROTATION COMPLETE ===\n");
+}
 // --------------------
 // 403 RECOVERY FUNCTION
 // --------------------
@@ -735,10 +795,7 @@ async function recoverFrom403(state) {
   console.log("♻️ Browser & pool destroyed");
 
   // 🔄 rebuild
-  state.browser = await chromium.launch({
-    headless: true,
-    args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
-  });
+  state.browser = await chromium.launch({headless: true,proxy: TOR_PROXY,args: ["--disable-blink-features=AutomationControlled","--no-sandbox"]});
 
   state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
   await state.pool.init();
@@ -753,7 +810,7 @@ async function recoverFrom403(state) {
       let retryBrowser, retryCtx;
 
       try {
-        retryBrowser = await chromium.launch({ headless: true });
+        retryBrowser = await chromium.launch({headless: true,proxy: TOR_PROXY,args: ["--disable-blink-features=AutomationControlled","--no-sandbox"]});
         retryCtx = await retryBrowser.newContext(randomContextOptions());
 
         console.log(`🔁 Retrying blocked code ${code}`);
@@ -811,13 +868,18 @@ const { chromium } = require("playwright");
 
     const state = {};
     runtimeWatchdog(state);
-    state.browser = await chromium.launch({
+    await chromium.launch({
       headless: true,
-      args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+      proxy: TOR_PROXY,
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox"
+      ]
     });
 
     state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
     await state.pool.init();
+    setInterval(() => {fullTorRotation(state).catch(err =>console.log("Rotation error:", err.message));}, 60000);
 
 
     for (const prefix of PREFIXES) {
