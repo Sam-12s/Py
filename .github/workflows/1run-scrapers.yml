@@ -17,6 +17,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+        
+      - run: |
+      - name: Run prefix generator
+        run: node prefix_generator.js
+
 
       - name: Upload updated scrappers
         uses: actions/upload-artifact@v4
