@@ -24,7 +24,7 @@ let stats = {
   other: 0,
   done: 0
 };
-
+const { chromium } = require("playwright");
 let GLOBAL_PAUSE = false;
 
 
@@ -157,13 +157,13 @@ function runtimeWatchdog(state) {
   const interval = setInterval(async () => {
     if (Date.now() >= END_TIME) {
       console.log("⏰ MAX EXECUTION TIME REACHED — FORCE SHUTDOWN");
-
       HARD_SHUTDOWN = true;
       STOP_FLAG = true;
       GLOBAL_PAUSE = true;
-
       clearInterval(interval);
-
+      
+      // ✅ FIXED - proper shutdown sequence
+      await stopAllWorkers(state);
       await gracefulShutdown(state);
     }
   }, 1000);
@@ -226,8 +226,7 @@ function logStatus(code, status) {
 
   console.log(
     `${color}[${code}] → ${label}\x1b[0m ` +
-    `| DONE ${stats.done}/${TOTAL_PER_PREFIX} ` +
-    `DONE ${stats.done}/${TOTAL_PER_PREFIX} | OK=${stats.ok} 403=${stats.forbidden} OTHER=${stats.other}`
+    `| DONE ${stats.done}/${TOTAL_PER_PREFIX} | OK=${stats.ok} 403=${stats.forbidden} OTHER=${stats.other}`
   );
 }
 
@@ -707,45 +706,53 @@ async function recoverFrom403(state) {
   console.log("✅ New browser & pool ready");
 
   // 🔁 retry ALL blocked codes safely
-  while (BLOCKED_QUEUE.size > 0) {
-    const codes = [...BLOCKED_QUEUE];
+// Replace the entire retry loop with:
+while (BLOCKED_QUEUE.size > 0) {
+  const codes = [...BLOCKED_QUEUE];
+  
+  for (const code of codes) {
+    let retryBrowser, retryCtx;
+    try {
+      retryBrowser = await chromium.launch({ headless: true });
+      retryCtx = await retryBrowser.newContext(randomContextOptions());
 
-    for (const code of codes) {
-      let retryBrowser, retryCtx;
+      const payload = { "Guid": code, "Lng": "en", "partner": 71 };
+      const headers = {
+      "accept": "application/json, text/plain, */*",
+      "content-type": "application/json",
+      "is-srv": "false",
+      "Referer": "https://indi-1xbet.com/en",
+      "Origin": "https://indi-1xbet.com",
+      "sec-ch-ua": SEC_CH_UA[Math.floor(Math.random() * SEC_CH_UA.length)],
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": ['"Windows"', '"macOS"', '"Linux"'][Math.floor(Math.random() * 3)],
+      "user-agent": USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+      "x-app-n": "__BETTING_APP__",
+      "x-hd": "X1cEBzjgXQIpJfHKN7hn4KKUPFfFP9pkoArENkWOgSyEMlhsyK1OdNmyIaoPJvSFISOBoWDaWRrzh9sGvjXhiJBc7O7d3wwK6UIIIonqgxyyGaCiOj+wannOImrkLEBnP1N8fih9oZMCu8jr6qvAnsG2J3FcekoRh4RokFUdRYVdN+bz018HINbj2aqS2Vw7JiXzx9aPzPmbzaOlRmMeYHgzoMxwV8qgyEvULtJbI8gwlbiCckChXEr5NbIxzykFWxWfwUG6yl3qUZoGU6W+sX1L+kdA2yOzn2TvV5x6Rv6dE8GL5gGrnCZsO6x4WXxMEhhfHR/7JafxUBY9j0LwRx0q28E9NDYBTEnywdfFCFDTHnKg4NrzSGIG2TNPkLLeRgSi0c2PM3XQ9W2zp8VbzyJ/vo+9M91DWuj1Qep1825OaK75KXDcWYYgzL27N3PCXd/tOC0Ta5LAkumhhif1YLLx140TT39K+V9e56bzeHtPF44TdUKrUOjsEhQ1okGNBZZ/r++e8pn0Dx1wWp43T73sh1IvjtDCpJ6QveoGmSrEuYrIM5PSyKV1tgqE9rnn/lKQ2aUTUywiwhyvGehBrMj92gfDNXY8", // Static for now
+      "x-mobile-project-id": "0",
+      "x-requested-with": "XMLHttpRequest",
+      "x-svc-source": "__BETTING_APP__"
+    };
 
-      try {
-        retryBrowser = await chromium.launch({ headless: true });
-        retryCtx = await retryBrowser.newContext(randomContextOptions());
+      const resp = await retryCtx.request.post(
+        `https://indi-1xbet.com/service-api/LiveBet/Open/GetCoupon`,
+        { timeout: 30000, headers, data: JSON.stringify(payload) }
+      );
 
-        console.log(`🔁 Retrying blocked code ${code}`);
-
-        const resp = await retryCtx.request.get(
-          `https://www.sportybet.com/api/ng/orders/share/${code}`,
-          { timeout: 30000 }
-        );
-
-        const status = resp.status();
-        console.log(`Retry status: ${status}`);
-        if (HARD_SHUTDOWN) break;
-        if (status === 200) {
-          console.log(`✅ 403 cleared for ${code}`);
-          BLOCKED_QUEUE.delete(code);
-        }
-
-      } catch (err) {
-        console.log(`Retry error for ${code}: ${err.message}`);
-      } finally {
-        try { await retryCtx?.close(); } catch {}
-        try { await retryBrowser?.close(); } catch {}
+      const status = resp.status();
+      if (status === 200) {
+        console.log(`✅ 403 cleared for ${code}`);
+        BLOCKED_QUEUE.delete(code);
       }
-
-      await new Promise(r => setTimeout(r, 3000)); // cooldown
+    } catch (err) {
+      console.log(`Retry error for ${code}: ${err.message}`);
+    } finally {
+      try { await retryCtx?.close(); } catch {}
+      try { await retryBrowser?.close(); } catch {}
     }
-
-    if (BLOCKED_QUEUE.size > 0) {
-      await new Promise(r => setTimeout(r, 1000));
-    }
+    await new Promise(r => setTimeout(r, 3000));
   }
+}
 
   // ▶ resume everything
   STOP_FLAG = false;
@@ -755,11 +762,6 @@ async function recoverFrom403(state) {
   console.log("▶ Workers resumed — full concurrency restored");
 }
 
-
-
-
-
-const { chromium } = require("playwright");
 
 (async () => {
 
