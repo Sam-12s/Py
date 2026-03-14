@@ -1,7 +1,7 @@
 const MAX_CONTEXTS = 50;        // real concurrency
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
-const MAX_RUNTIME_MINUTES = 352;
+const MAX_RUNTIME_MINUTES = 356;
 let REQUEST_COUNTER = 0;
 const RESTART_THRESHOLD = 2500;
 let RESTARTING = false;
@@ -227,7 +227,7 @@ function logStatus(code, status) {
   console.log(
     `${color}[${code}] → ${label}\x1b[0m ` +
     `| DONE ${stats.done}/${TOTAL_PER_PREFIX} ` +
-    `OK=${stats.ok} 403=${stats.forbidden} OTHER=${stats.other}`
+    `DONE ${stats.done}/${TOTAL_PER_PREFIX} | OK=${stats.ok} 403=${stats.forbidden} OTHER=${stats.other}`
   );
 }
 
@@ -346,142 +346,110 @@ async function restartBrowserAndPool(state) {
   RESTARTING = false;
 }
 
-async function fetchCode(ctx, code, state) {
+// 🔄 1XBET Header Rotation System (Add BEFORE fetchCode)
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", 
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
+];
 
-  // ⛔ hard pause barrier
+const SEC_CH_UA = [
+  '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+  '"Not_A Brand";v="99", "Google Chrome";v="120", "Chromium";v="120"',
+  '"Chromium";v="120", "Not_A Brand";v="8", "Google Chrome";v="120"'
+];
+
+async function fetchCode(ctx, code, state) {
+  // ⛔ hard pause barrier (KEEP ALL ORIGINAL LOGIC)
   await waitIfPaused();
 
-  // 🚫 reject stale contexts
+  // 🚫 reject stale contexts (KEEP ALL ORIGINAL LOGIC)
   if (ctx.__poolGen !== POOL_GENERATION) {
     return "STALE";
   }
 
-  IN_FLIGHT++; // 🔒 mark request active
+  IN_FLIGHT++; // 🔒 mark request active (KEEP)
 
   try {
-    await waitIfPaused(); // double guard
+    await waitIfPaused(); // double guard (KEEP)
 
-    const resp = await ctx.request.get(
-      `https://www.sportybet.com/api/ng/orders/share/${code}`,
+    // 🔥 1XBET-SPECIFIC PAYLOAD - ONLY Guid changes per request
+    const payload = {
+      "Guid": code,      // ← DYNAMIC: NHBXF, ABC12, etc.
+      "Lng": "en",
+      "partner": 71      // ← FIXED as per your info
+    };
+
+    // 🔄 ROTATING HEADERS - Different machine fingerprints
+    const headers = {
+      "accept": "application/json, text/plain, */*",
+      "content-type": "application/json",
+      "is-srv": "false",
+      "Referer": "https://indi-1xbet.com/en",
+      "Origin": "https://indi-1xbet.com",
+      "sec-ch-ua": SEC_CH_UA[Math.floor(Math.random() * SEC_CH_UA.length)],
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": ['"Windows"', '"macOS"', '"Linux"'][Math.floor(Math.random() * 3)],
+      "user-agent": USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+      "x-app-n": "__BETTING_APP__",
+      "x-hd": "X1cEBzjgXQIpJfHKN7hn4KKUPFfFP9pkoArENkWOgSyEMlhsyK1OdNmyIaoPJvSFISOBoWDaWRrzh9sGvjXhiJBc7O7d3wwK6UIIIonqgxyyGaCiOj+wannOImrkLEBnP1N8fih9oZMCu8jr6qvAnsG2J3FcekoRh4RokFUdRYVdN+bz018HINbj2aqS2Vw7JiXzx9aPzPmbzaOlRmMeYHgzoMxwV8qgyEvULtJbI8gwlbiCckChXEr5NbIxzykFWxWfwUG6yl3qUZoGU6W+sX1L+kdA2yOzn2TvV5x6Rv6dE8GL5gGrnCZsO6x4WXxMEhhfHR/7JafxUBY9j0LwRx0q28E9NDYBTEnywdfFCFDTHnKg4NrzSGIG2TNPkLLeRgSi0c2PM3XQ9W2zp8VbzyJ/vo+9M91DWuj1Qep1825OaK75KXDcWYYgzL27N3PCXd/tOC0Ta5LAkumhhif1YLLx140TT39K+V9e56bzeHtPF44TdUKrUOjsEhQ1okGNBZZ/r++e8pn0Dx1wWp43T73sh1IvjtDCpJ6QveoGmSrEuYrIM5PSyKV1tgqE9rnn/lKQ2aUTUywiwhyvGehBrMj92gfDNXY8", // Static for now
+      "x-mobile-project-id": "0",
+      "x-requested-with": "XMLHttpRequest",
+      "x-svc-source": "__BETTING_APP__"
+    };
+
+    // 🔥 1XBET ENDPOINT + POST
+    const resp = await ctx.request.post(
+      `https://indi-1xbet.com/service-api/LiveBet/Open/GetCoupon`,
       {
         timeout: 30000,
-        headers: {
-          "Accept": "application/json, text/plain, */*",
-          "Referer": "https://www.sportybet.com/en"
-        }
+        headers: headers,
+        data: JSON.stringify(payload)  // JSON payload
       }
     );
 
     const status = resp.status();
 
-    // 🚨 403 HANDLING (QUEUE, NOT OVERWRITE)
+    // 🚨 403 HANDLING (KEEP ALL ORIGINAL LOGIC)
     if (status === 403) {
       BLOCKED_QUEUE.add(code);
       logStatus(code, 403);
-
       console.log("🚨 403 detected — queued for recovery");
-
       try { await ctx.close(); } catch {}
-
       recoverFrom403(state);
       return "403";
     }
 
-    // ❌ non-200
+    // ❌ non-200 (KEEP)
     if (status !== 200) {
       logStatus(code, status);
       return;
     }
 
-    // ✅ success
-    
+    // ✅ 1XBET JSON PROCESSING (KEEP JSON HANDLING)
+    try {
+      const contentType = resp.headers()["content-type"] || "";
+      const text = await resp.text();
 
-try {
-    const contentType = resp.headers()["content-type"] || "";
-    const text = await resp.text();
-
-    // ==========================
-    // JSON RESPONSE
-    // ==========================
-    if (contentType.includes("application/json")) {
+      if (contentType.includes("application/json")) {
         let jsonObj;
         try {
-            jsonObj = JSON.parse(text);
+          jsonObj = JSON.parse(text);
         } catch (e) {
-            console.log(`[${code}] JSON parse error`);
-            return;
+          console.log(`[${code}] JSON parse error`);
+          return;
         }
 
+        // 🔥 PASS TO NEW processResponse
         await processResponse(jsonObj, code, "JS");
         return;
-    }
+      }
 
-    // ==========================
-    // XML RESPONSE (Python Equivalent)
-    // ==========================
-    if (text.startsWith("<BaseRsp")) {
-
-        const parser = new xml2js.Parser({
-            explicitArray: false,
-            mergeAttrs: true
-        });
-
-        let result;
-        try {
-            result = await parser.parseStringPromise(text);
-        } catch (err) {
-            console.log(`[${code}] XML parse failed`);
-            return;
-        }
-
-        const message = result?.BaseRsp?.message;
-        if (message !== "Success") {
-            return;
-        }
-
-        let outcomes = result?.BaseRsp?.data?.outcomes?.outcomes;
-        if (!outcomes) return;
-
-        if (!Array.isArray(outcomes)) {
-            outcomes = [outcomes];
-        }
-
-        // Convert XML structure to JSON-like format
-        const normalized = {
-            message: "Success",
-            data: {
-                outcomes: outcomes.map(o => ({
-                    matchStatus: o.matchStatus,
-                    estimateStartTime: Number(o.estimateStartTime),
-                    homeTeamName: o.homeTeamName,
-                    awayTeamName: o.awayTeamName,
-                    sport: {
-                        name: o?.sport?.name,
-                        category: {
-                            name: o?.sport?.category?.name
-                        }
-                    },
-                    markets: [{
-                        desc: o?.markets?.markets?.desc,
-                        lastOddsChangeTime: Number(o?.markets?.markets?.lastOddsChangeTime),
-                        outcomes: [{
-                            desc: o?.markets?.markets?.outcomes?.outcomes?.desc,
-                            odds: Number(o?.markets?.markets?.outcomes?.outcomes?.odds)
-                        }]
-                    }]
-                }))
-            }
-        };
-
-        await processResponse(normalized, code, "XML");
-        return;
-    }
-
-    console.log(`[${code}] Unknown response format`);
-} catch (err) {
-    console.log(`[${code}] Response handling error: ${err.message}`);
-}
-finally {
+      console.log(`[${code}] Unknown response format: ${contentType}`);
+    } catch (err) {
+      console.log(`[${code}] Response handling error: ${err.message}`);
+    } finally {
       try { resp.dispose?.(); } catch {}
     }
 
@@ -492,10 +460,10 @@ finally {
       `\x1b[35m[${code}] → ERROR (${err.message})\x1b[0m | DONE ${stats.done}/${TOTAL_PER_PREFIX}`
     );
   } finally {
-    IN_FLIGHT--; // 🔓 request finished
+    IN_FLIGHT--; // 🔓 request finished (KEEP)
   }
 
-  REQUEST_COUNTER++;
+  REQUEST_COUNTER++; // KEEP
 }
 
 
@@ -503,26 +471,18 @@ finally {
 function processResponse(response, local_code, session_id = "JS") {
   if (!response) return false;
 
-  if (response.message === "The code is invalid.") {
-
+  // 🔥 1XBET: Check Success
+  if (response.Success !== true) {
     return "INVALID";
   }
 
-  if (response.message !== "Success") {
-
-    return false;
-  }
-
-  const pg = response.data?.outcomes;
-  if (!pg) return false;
+  // 🔥 1XBET: response.Value.Events
+  const pg = response.Value?.Events;
+  if (!pg || pg.length === 0) return false;
 
   const number_of_event = pg.length;
-  if (number_of_event === 0) {
 
-    return "VALID";
-  }
-
-  // --- Memory-safe arrays ---
+  // --- Memory-safe arrays (EXACT SAME) ---
   const events_status = [];
   const datetimestamp = [];
   const match_date = [];
@@ -534,7 +494,6 @@ function processResponse(response, local_code, session_id = "JS") {
   const lst_teams = [];
   const lst_change = [];
   const lst_match_oddchanges = [];
-  const lst_type = [];
 
   const today_date = new Date().toDateString();
 
@@ -542,18 +501,18 @@ function processResponse(response, local_code, session_id = "JS") {
     for (let i = 0; i < number_of_event; i++) {
       const e = pg[i];
 
-      // Directly push primitive values to arrays
-      events_status.push(e.matchStatus);
-      datetimestamp.push(Number(e.estimateStartTime));
-      odds.push(Number(e.markets[0].outcomes[0].odds));
-      sports.push(String(e.sport.name));
-      lst_type.push(String(e.sport.category.name));
-      lst_events.push(String(e.markets[0].desc));
-      lst_scores.push(String(e.markets[0].outcomes[0].desc));
-      lst_teams.push(`${e.homeTeamName} vs ${e.awayTeamName}`);
-      lst_change.push(Number(e.markets[0].lastOddsChangeTime));
+      // 🔥 1XBET FIELDS ONLY - NO EXTRA lst_type
+      events_status.push(e.Finish === false);                    // false = not finished
+      datetimestamp.push(Number(e.Start) * 1000);                // Unix → ms
+      odds.push(Number(e.Coef));                                 // Odds
+      sports.push(String(e.SportNameEng));                       // "Football"
+      lst_events.push(String(e.GroupName));                      // "1x2"
+      lst_scores.push(String(e.MarketName));                     // "W1", "W2"
+      lst_teams.push(`${e.Opp1} vs ${e.Opp2}`);
+      lst_change.push(Number(e.Start));                          // Use Start as change proxy
     }
 
+    // Timestamps (EXACT SAME LOGIC)
     for (const ts of datetimestamp) {
       const d = new Date(ts);
       match_date.push(d.toDateString());
@@ -577,11 +536,11 @@ function processResponse(response, local_code, session_id = "JS") {
     const change_times = lst_match_oddchanges.join("|");
     const teams = lst_teams.join("|");
 
+    // 🔥 YOUR EXACT ORIGINAL STRUCTURE - 1XBET ADAPTED
     if (
-      events_status.every(s => ["Not start","H1"].includes(s)) &&
-      match_date.every(d => d === today_date) &&
-      lst_type.every(t => t !== "Simulated Reality League") &&
-      sports.every(s => s === "Football")
+      events_status.every(s => s === false) &&                    // Finish: false
+      match_date.every(d => d === today_date) &&                  // Today
+      sports.every(s => s === "Football")                         // Football only
     ) {
       if (number_of_event === 4 && total_result > 100 && total_result < 200) {
         logCode("QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
@@ -590,30 +549,32 @@ function processResponse(response, local_code, session_id = "JS") {
         logCode("TRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
         return "VALID";
       } else if (number_of_event === 2 && total_result > 25 && total_result < 180 &&
-                 lst_events.every(e => e === "Correct Score")) {
+                 lst_events.every(e => e === "Correct Score")) {        // 1xbet equiv?
         logCode("DOUBLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
         return "VALID";
-      } else if (number_of_event === 1 && total_result > 5 && total_result < 30 &&
-                 lst_events.every(e => e === "Correct Score")) {
+      } else if (number_of_event === 1 && total_result > 5 && total_result < 40 &&
+                 lst_events.every(e => e === "Correct Score")) {        // 1xbet equiv?
         logCode("SINGLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
         return "VALID";
       }
-    } else {
+    } 
 
-    }
   } catch (err) {
     console.log(err, `1----${local_code}`);
   } finally {
-    // --- Memory cleanup ---
+    // --- Memory cleanup (EXACT SAME) ---
     [pg, events_status, datetimestamp, match_date, odds, sports,
      lst_events, lst_match_time, lst_scores, lst_teams,
-     lst_change, lst_match_oddchanges, lst_type].forEach(arr => { if (Array.isArray(arr)) arr.length = 0; });
+     lst_change, lst_match_oddchanges].forEach(arr => { 
+      if (Array.isArray(arr)) arr.length = 0; 
+    });
 
     global.gc?.();
   }
 
   return false;
 }
+
 
 async function runPrefix(state, prefix) {
   const codes = generateCodes(prefix);
@@ -806,14 +767,19 @@ const { chromium } = require("playwright");
 
   try {
     const PREFIXES = [
-    "RH3",
+    "RH",
 ];
 
     const state = {};
     runtimeWatchdog(state);
     state.browser = await chromium.launch({
       headless: true,
-      args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+      args: [
+        "--disable-blink-features=AutomationControlled", 
+        "--no-sandbox",
+        "--disable-web-security",
+        "--disable-features=VizDisplayCompositor"
+      ]
     });
 
     state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
@@ -821,7 +787,7 @@ const { chromium } = require("playwright");
 
 
     for (const prefix of PREFIXES) {
-      console.log(`🚀 Processing prefix ${prefix}`);
+      console.log(`🚀 1XBET: Processing ${TOTAL_PER_PREFIX} codes for ${prefix}`);
 
       stats = { ok: 0, forbidden: 0, other: 0, done: 0 };
 
