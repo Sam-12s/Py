@@ -57,6 +57,15 @@ async function waitIfPaused() {
     await new Promise(r => setTimeout(r, 50));
   }
 }
+
+function generateXHD() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  for (let i = 0; i < 256; i++) {  // keep length similar to your current string
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
 async function rotateProxy(state) {
 
   if (HARD_SHUTDOWN) return;
@@ -485,7 +494,7 @@ async function fetchCode(ctx, code, state) {
       "sec-ch-ua-platform": ['"Windows"', '"macOS"', '"Linux"'][Math.floor(Math.random() * 3)],
       "user-agent": USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
       "x-app-n": "__BETTING_APP__",
-      "x-hd": "X1cEBzjgXQIpJfHKN7hn4KKUPFfFP9pkoArENkWOgSyEMlhsyK1OdNmyIaoPJvSFISOBoWDaWRrzh9sGvjXhiJBc7O7d3wwK6UIIIonqgxyyGaCiOj+wannOImrkLEBnP1N8fih9oZMCu8jr6qvAnsG2J3FcekoRh4RokFUdRYVdN+bz018HINbj2aqS2Vw7JiXzx9aPzPmbzaOlRmMeYHgzoMxwV8qgyEvULtJbI8gwlbiCckChXEr5NbIxzykFWxWfwUG6yl3qUZoGU6W+sX1L+kdA2yOzn2TvV5x6Rv6dE8GL5gGrnCZsO6x4WXxMEhhfHR/7JafxUBY9j0LwRx0q28E9NDYBTEnywdfFCFDTHnKg4NrzSGIG2TNPkLLeRgSi0c2PM3XQ9W2zp8VbzyJ/vo+9M91DWuj1Qep1825OaK75KXDcWYYgzL27N3PCXd/tOC0Ta5LAkumhhif1YLLx140TT39K+V9e56bzeHtPF44TdUKrUOjsEhQ1okGNBZZ/r++e8pn0Dx1wWp43T73sh1IvjtDCpJ6QveoGmSrEuYrIM5PSyKV1tgqE9rnn/lKQ2aUTUywiwhyvGehBrMj92gfDNXY8", // Static for now
+      "x-hd": generateXHD(),
       "x-mobile-project-id": "0",
       "x-requested-with": "XMLHttpRequest",
       "x-svc-source": "__BETTING_APP__"
@@ -842,7 +851,7 @@ while (BLOCKED_QUEUE.size > 0) {
       "sec-ch-ua-platform": ['"Windows"', '"macOS"', '"Linux"'][Math.floor(Math.random() * 3)],
       "user-agent": USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
       "x-app-n": "__BETTING_APP__",
-      "x-hd": "X1cEBzjgXQIpJfHKN7hn4KKUPFfFP9pkoArENkWOgSyEMlhsyK1OdNmyIaoPJvSFISOBoWDaWRrzh9sGvjXhiJBc7O7d3wwK6UIIIonqgxyyGaCiOj+wannOImrkLEBnP1N8fih9oZMCu8jr6qvAnsG2J3FcekoRh4RokFUdRYVdN+bz018HINbj2aqS2Vw7JiXzx9aPzPmbzaOlRmMeYHgzoMxwV8qgyEvULtJbI8gwlbiCckChXEr5NbIxzykFWxWfwUG6yl3qUZoGU6W+sX1L+kdA2yOzn2TvV5x6Rv6dE8GL5gGrnCZsO6x4WXxMEhhfHR/7JafxUBY9j0LwRx0q28E9NDYBTEnywdfFCFDTHnKg4NrzSGIG2TNPkLLeRgSi0c2PM3XQ9W2zp8VbzyJ/vo+9M91DWuj1Qep1825OaK75KXDcWYYgzL27N3PCXd/tOC0Ta5LAkumhhif1YLLx140TT39K+V9e56bzeHtPF44TdUKrUOjsEhQ1okGNBZZ/r++e8pn0Dx1wWp43T73sh1IvjtDCpJ6QveoGmSrEuYrIM5PSyKV1tgqE9rnn/lKQ2aUTUywiwhyvGehBrMj92gfDNXY8", // Static for now
+      "x-hd": generateXHD(),
       "x-mobile-project-id": "0",
       "x-requested-with": "XMLHttpRequest",
       "x-svc-source": "__BETTING_APP__"
