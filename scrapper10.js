@@ -1,4 +1,4 @@
-const MAX_CONTEXTS = 50;        // real concurrency
+const MAX_CONTEXTS = 30;        // real concurrency
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
 const MAX_RUNTIME_MINUTES = 356;
