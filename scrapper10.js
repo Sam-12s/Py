@@ -18,6 +18,7 @@ let STOP_FLAG = false;
 let BLOCKED_CODE = null;
 let DEBUG_COUNTER = 0;
 let HARD_SHUTDOWN = false;
+let PROXY_ROTATING = false;
 let stats = {
   ok: 0,
   forbidden: 0,
@@ -27,12 +28,80 @@ let stats = {
 const { chromium } = require("playwright");
 let GLOBAL_PAUSE = false;
 
+const PROXIES = [
+  'http://spfsvdt89u:f25gv0_jbagu1ZPLMb@dc.decodo.com:10001',
+  'http://spfsvdt89u:f25gv0_jbagu1ZPLMb@dc.decodo.com:10002',
+  'http://spfsvdt89u:f25gv0_jbagu1ZPLMb@dc.decodo.com:10003'
+];
+
+let CURRENT_PROXY_INDEX = 0;
+let CURRENT_PROXY = PROXIES[CURRENT_PROXY_INDEX];
+const PROXY_ROTATION_THRESHOLD = 6000;
+let PROXY_REQUEST_COUNTER = 0;
 
 async function waitIfPaused() {
   if (!GLOBAL_PAUSE) return;
   while (GLOBAL_PAUSE) {
     await new Promise(r => setTimeout(r, 50));
   }
+}
+async function rotateProxy(state) {
+
+  if (HARD_SHUTDOWN) return;
+
+  console.log("🌐 Proxy rotation starting...");
+
+  // Pause workers
+  GLOBAL_PAUSE = true;
+  STOP_FLAG = true;
+
+  // Wait for all in-flight requests to finish
+  while (IN_FLIGHT > 0) {
+    await new Promise(r => setTimeout(r, 20));
+  }
+
+  console.log("🧊 All active requests completed");
+
+  // Move to next proxy
+  CURRENT_PROXY_INDEX++;
+
+  if (CURRENT_PROXY_INDEX >= PROXIES.length) {
+    CURRENT_PROXY_INDEX = 0;
+  }
+
+  CURRENT_PROXY = PROXIES[CURRENT_PROXY_INDEX];
+
+  console.log(`🔁 Switching to proxy: ${CURRENT_PROXY}`);
+  POOL_GENERATION++;
+
+  // Destroy current pool and browser
+  try { await state.pool.close(); } catch {}
+  try { await state.browser.close(); } catch {}
+
+  // Launch new browser with new proxy
+  state.browser = await chromium.launch({
+    headless: true,
+    proxy: {
+      server: CURRENT_PROXY
+    },
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox"
+    ]
+  });
+
+  // Recreate context pool
+  state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
+  await state.pool.init();
+
+  // Reset request counter
+  PROXY_REQUEST_COUNTER = 0;
+
+  console.log("✅ Proxy rotation complete");
+
+  // Resume workers
+  STOP_FLAG = false;
+  GLOBAL_PAUSE = false;
 }
 
 const { google } = require("googleapis");
@@ -303,9 +372,6 @@ class ContextPool {
   return ctx;
 }
 
-
-
-
   release(ctx) {
     this.queue.push(ctx);
   }
@@ -318,31 +384,46 @@ class ContextPool {
 }
 
 async function restartBrowserAndPool(state) {
-  if (RESTARTING) return;
 
-  RESTARTING = true;
+  if (HARD_SHUTDOWN) return;
 
-  console.log("\n🔄 SAFE RESTART (waiting workers idle)...\n");
+  console.log("♻ Restarting browser + context pool");
 
-  // allow in-flight requests to finish
-  await new Promise(r => setTimeout(r, 200));
+  // 🔴 PAUSE ALL WORKERS
+  GLOBAL_PAUSE = true;
+  STOP_FLAG = true;
 
-  await state.pool.close();
-  await state.browser.close();
+  // Wait for running requests to finish
+  while (IN_FLIGHT > 0) {
+    await new Promise(r => setTimeout(r, 20));
+  }
+  POOL_GENERATION++;
 
+  // Close old pool and browser
+  try { await state.pool.close(); } catch {}
+  try { await state.browser.close(); } catch {}
+
+  // Launch new browser
   state.browser = await chromium.launch({
-    headless: true,
-    args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
-  });
+      headless: true,
+      proxy: {server: CURRENT_PROXY},
+      args: [
+        "--disable-blink-features=AutomationControlled", 
+        "--no-sandbox",
+        "--disable-web-security",
+        "--disable-features=VizDisplayCompositor"
+      ]
+    });
 
+  // Recreate pool
   state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
   await state.pool.init();
 
-  REQUEST_COUNTER = 0;
+  console.log("✅ Browser and pool restarted");
 
-  console.log("✅ Restart complete\n");
-
-  RESTARTING = false;
+  // 🟢 RESUME WORKERS
+  STOP_FLAG = false;
+  GLOBAL_PAUSE = false;
 }
 
 // 🔄 1XBET Header Rotation System (Add BEFORE fetchCode)
@@ -425,7 +506,9 @@ async function fetchCode(ctx, code, state) {
       logStatus(code, status);
       return;
     }
-
+    if (status === 200) {
+    logStatus(code, 200);
+    }
     // ✅ 1XBET JSON PROCESSING (KEEP JSON HANDLING)
     try {
       const contentType = resp.headers()["content-type"] || "";
@@ -463,6 +546,15 @@ async function fetchCode(ctx, code, state) {
   }
 
   REQUEST_COUNTER++; // KEEP
+
+  PROXY_REQUEST_COUNTER++;
+
+  if (PROXY_REQUEST_COUNTER >= PROXY_ROTATION_THRESHOLD && !PROXY_ROTATING) {
+    PROXY_ROTATING = true;
+    PROXY_REQUEST_COUNTER = 0;
+    await rotateProxy(state);
+    PROXY_ROTATING = false;
+  }
 }
 
 
@@ -562,11 +654,11 @@ function processResponse(response, local_code, session_id = "JS") {
     console.log(err, `1----${local_code}`);
   } finally {
     // --- Memory cleanup (EXACT SAME) ---
-    [pg, events_status, datetimestamp, match_date, odds, sports,
-     lst_events, lst_match_time, lst_scores, lst_teams,
-     lst_change, lst_match_oddchanges].forEach(arr => { 
-      if (Array.isArray(arr)) arr.length = 0; 
-    });
+[events_status, datetimestamp, match_date, odds, sports,
+ lst_events, lst_match_time, lst_scores, lst_teams,
+ lst_change, lst_match_oddchanges].forEach(arr => { 
+  arr.length = 0;
+});
 
     global.gc?.();
   }
@@ -681,6 +773,10 @@ async function recoverFrom403(state) {
   // ⏳ wait for ALL in-flight requests
   while (IN_FLIGHT > 0) {
     await new Promise(r => setTimeout(r, 20));
+}
+
+  while (state.pool.queue.length < state.pool.size) {
+    await new Promise(r => setTimeout(r, 20));
   }
 
   console.log("🧊 All in-flight requests completed");
@@ -697,7 +793,13 @@ async function recoverFrom403(state) {
   // 🔄 rebuild
   state.browser = await chromium.launch({
     headless: true,
-    args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+    proxy: {server: CURRENT_PROXY},
+    args: [
+      "--disable-blink-features=AutomationControlled", 
+      "--no-sandbox",
+      "--disable-web-security",
+      "--disable-features=VizDisplayCompositor"
+    ]
   });
 
   state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
@@ -713,7 +815,7 @@ while (BLOCKED_QUEUE.size > 0) {
   for (const code of codes) {
     let retryBrowser, retryCtx;
     try {
-      retryBrowser = await chromium.launch({ headless: true });
+      retryBrowser = await chromium.launch({headless: true,proxy: { server: CURRENT_PROXY }});
       retryCtx = await retryBrowser.newContext(randomContextOptions());
 
       const payload = { "Guid": code, "Lng": "en", "partner": 71 };
@@ -776,6 +878,7 @@ while (BLOCKED_QUEUE.size > 0) {
     runtimeWatchdog(state);
     state.browser = await chromium.launch({
       headless: true,
+      proxy: {server: CURRENT_PROXY},
       args: [
         "--disable-blink-features=AutomationControlled", 
         "--no-sandbox",
