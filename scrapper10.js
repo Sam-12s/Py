@@ -29,9 +29,21 @@ const { chromium } = require("playwright");
 let GLOBAL_PAUSE = false;
 
 const PROXIES = [
-  'http://spfsvdt89u:f25gv0_jbagu1ZPLMb@dc.decodo.com:10001',
-  'http://spfsvdt89u:f25gv0_jbagu1ZPLMb@dc.decodo.com:10002',
-  'http://spfsvdt89u:f25gv0_jbagu1ZPLMb@dc.decodo.com:10003'
+  {
+    server: "http://dc.decodo.com:10001",
+    username: "spfsvdt89u",
+    password: "f25gv0_jbagu1ZPLMb"
+  },
+  {
+    server: "http://dc.decodo.com:10002",
+    username: "spfsvdt89u",
+    password: "f25gv0_jbagu1ZPLMb"
+  },
+  {
+    server: "http://dc.decodo.com:10003",
+    username: "spfsvdt89u",
+    password: "f25gv0_jbagu1ZPLMb"
+  }
 ];
 
 let CURRENT_PROXY_INDEX = 0;
@@ -406,7 +418,7 @@ async function restartBrowserAndPool(state) {
   // Launch new browser
   state.browser = await chromium.launch({
       headless: true,
-      proxy: {server: CURRENT_PROXY},
+      proxy: PROXIES[CURRENT_PROXY_INDEX],
       args: [
         "--disable-blink-features=AutomationControlled", 
         "--no-sandbox",
@@ -793,7 +805,7 @@ async function recoverFrom403(state) {
   // 🔄 rebuild
   state.browser = await chromium.launch({
     headless: true,
-    proxy: {server: CURRENT_PROXY},
+    proxy: PROXIES[CURRENT_PROXY_INDEX],
     args: [
       "--disable-blink-features=AutomationControlled", 
       "--no-sandbox",
@@ -871,14 +883,15 @@ while (BLOCKED_QUEUE.size > 0) {
 
   try {
     const PREFIXES = [
-    "RH",
+    "5H",
+    "1X",
 ];
 
     const state = {};
     runtimeWatchdog(state);
     state.browser = await chromium.launch({
       headless: true,
-      proxy: {server: CURRENT_PROXY},
+      proxy: PROXIES[CURRENT_PROXY_INDEX],
       args: [
         "--disable-blink-features=AutomationControlled", 
         "--no-sandbox",
