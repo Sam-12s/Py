@@ -261,8 +261,18 @@ if (!isMainThread && workerData === "DB_WORKER") {
 // MAIN THREAD
 // ============================================================
 let dbWorker;
+let dbReadyPromise;
+
 if (isMainThread) {
   dbWorker = new Worker(__filename, { workerData: "DB_WORKER" });
+
+  dbReadyPromise = new Promise((resolve) => {
+    dbWorker.on("message", (msg) => {
+      if (msg === "ready") {
+        resolve();
+      }
+    });
+  });
 }
 
 function logCode(label, code, workerId, teams, events, score, times, odds, totalOdds, lastChange) {
@@ -710,7 +720,8 @@ function runtimeWatchdog() {
 (async () => {
   try {
     runtimeWatchdog();
-
+    await dbReadyPromise;
+    console.log("✅ DB ready, starting scraper...");
     // Generate all 1156 two-char prefixes and shuffle randomly
     const ALL_PREFIXES = generateAllPrefixes();
     shuffle(ALL_PREFIXES);
