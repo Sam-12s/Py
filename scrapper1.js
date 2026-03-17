@@ -254,6 +254,8 @@ if (!isMainThread && workerData === "DB_WORKER") {
 
   setInterval(flush, 200);
   console.log("🗄️  DB Worker ready");
+  parentPort.postMessage("ready");
+  console.log("🗄️  DB Worker ready");
   return;
 }
 
@@ -378,15 +380,12 @@ function processResponse(response, local_code, session_id = "JS") {
     const teams = lst_teams.join("|");
 
     if (
-      events_status.every(s => s === false) &&
+      events_status.every(s => s === true) &&
       match_date.every(d => d === today_date) &&
       sports.every(s => s === "Football")
     ) {
-      console.log(`-----------------------------------------------------------------------------------------------------1`);
       if (number_of_event === 4 && total_result > 100 && total_result < 200) {
-        console.log(`-----------------------------------------------------------------------------------------------------2`);
         logCode("QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
-        console.log(`-----------------------------------------------------------------------------------------------------3`);
         return "VALID";
       } 
     }
