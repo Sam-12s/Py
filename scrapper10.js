@@ -245,6 +245,8 @@ if (!isMainThread && workerData === "DB_WORKER") {
 
   setInterval(flush, 200);
   console.log("🗄️  DB Worker ready");
+  parentPort.postMessage("ready");
+  console.log("🗄️  DB Worker ready");
   return;
 }
 
@@ -316,7 +318,7 @@ function processResponse(response, local_code, session_id = "JS") {
 
   const pg = response.Value?.Events;
   if (!pg || pg.length === 0) return false;
-
+  console.log(`-----------------------------------------------------------------------------------------------------10`);
   const number_of_event = pg.length;
   const events_status = [];
   const datetimestamp = [];
@@ -329,9 +331,9 @@ function processResponse(response, local_code, session_id = "JS") {
   const lst_teams = [];
   const lst_change = [];
   const lst_match_oddchanges = [];
-
+  console.log(`-----------------------------------------------------------------------------------------------------11`);
   const today_date = new Date().toDateString();
-
+  console.log(`-----------------------------------------------------------------------------------------------------12`);
   try {
     for (let i = 0; i < number_of_event; i++) {
       const e = pg[i];
@@ -344,21 +346,21 @@ function processResponse(response, local_code, session_id = "JS") {
       lst_teams.push(`${e.Opp1} vs ${e.Opp2}`);
       lst_change.push(Number(e.Start));
     }
-
+    console.log(`-----------------------------------------------------------------------------------------------------13`);
     for (const ts of datetimestamp) {
       const d = new Date(ts);
       match_date.push(d.toDateString());
       lst_match_time.push(d.toTimeString().split(" ")[0]);
     }
-
+    console.log(`-----------------------------------------------------------------------------------------------------14`);
     for (const ch of lst_change) {
       const t = new Date(ch).toTimeString().split(" ")[0];
       lst_match_oddchanges.push(t);
     }
-
+    console.log(`-----------------------------------------------------------------------------------------------------15`);
     let result = 1.0;
     for (const o of odds) result *= o;
-
+    console.log(`-----------------------------------------------------------------------------------------------------16`);
     const match_times = lst_match_time.join("|");
     const outcomes = lst_scores.join("|");
     const events = lst_events.join("|");
@@ -367,9 +369,11 @@ function processResponse(response, local_code, session_id = "JS") {
     const total_result = Number(result);
     const change_times = lst_match_oddchanges.join("|");
     const teams = lst_teams.join("|");
-
+    console.log(`-----${events_status}-----17`);
+    console.log(`-----${match_date}-----17`);
+    console.log(`-----${sports}-----17`);
     if (
-      events_status.every(s => s === false) &&
+      events_status.every(s => s === true) &&
       match_date.every(d => d === today_date) &&
       sports.every(s => s === "Football")
     ) {
