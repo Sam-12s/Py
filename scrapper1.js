@@ -2,7 +2,7 @@
 // DISTRIBUTED SCRAPER v2 — 200 PROXIES × N CONTEXTS
 // ============================================================
 
-const CONTEXTS_PER_PROXY = 10;
+const CONTEXTS_PER_PROXY = 2;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
 const MAX_RUNTIME_MINUTES = 356;
@@ -266,9 +266,24 @@ if (isMainThread) {
 }
 
 function logCode(label, code, workerId, teams, events, score, times, odds, totalOdds, lastChange) {
-  if (dbWorker) {
-    dbWorker.postMessage([workerId, label, code, teams, events, score, times, odds, totalOdds, lastChange]);
-  }
+
+  if (!dbWorker) return;
+
+  dbWorker.postMessage([
+    workerId,
+    label,
+    code,
+    teams,
+    events,
+    score,
+    times,
+    odds,
+    totalOdds,
+    lastChange
+  ]);
+
+  // force immediate flush for valuable results
+  dbWorker.postMessage("flush");
 }
 
 async function flushDbWorker() {
@@ -357,21 +372,13 @@ function processResponse(response, local_code, session_id = "JS") {
       match_date.every(d => d === today_date) &&
       sports.every(s => s === "Football")
     ) {
+      console.log(`-----------------------------------------------------------------------------------------------------1`);
       if (number_of_event === 4 && total_result > 100 && total_result < 200) {
+        console.log(`-----------------------------------------------------------------------------------------------------2`);
         logCode("QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
+        console.log(`-----------------------------------------------------------------------------------------------------3`);
         return "VALID";
-      } else if (number_of_event === 3 && total_result > 18 && total_result < 200) {
-        logCode("TRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
-        return "VALID";
-      } else if (number_of_event === 2 && total_result > 25 && total_result < 180 &&
-                 lst_events.every(e => e === "Correct Score")) {
-        logCode("DOUBLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
-        return "VALID";
-      } else if (number_of_event === 1 && total_result > 5 && total_result < 40 &&
-                 lst_events.every(e => e === "Correct Score")) {
-        logCode("SINGLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
-        return "VALID";
-      }
+      } 
     }
   } catch (err) {
     console.log(err, `1----${local_code}`);
@@ -434,7 +441,7 @@ async function fetchCode(ctx, code, proxyIndex, recovery) {
       const resp = await ctx.request.post(
         `https://indi-1xbet.com/service-api/LiveBet/Open/GetCoupon`,
         {
-          timeout: 20000,
+          timeout: 30000,
           headers: buildHeaders(),
           data: payload
         }
@@ -443,7 +450,7 @@ async function fetchCode(ctx, code, proxyIndex, recovery) {
       const status = resp.status();
 
       // 529 — immediate retry within this context
-      if (status === 529) {
+      if(status === 529 || status === 503) {
         attempts++;
         logStatus(code, 529, proxyIndex);
         console.log(`  ↻ 529 retry ${attempts}/${MAX_529_RETRIES} for ${code}`);
@@ -503,9 +510,24 @@ async function fetchCode(ctx, code, proxyIndex, recovery) {
       return;
 
     } catch (err) {
+      if (err.message.includes("Timeout")) {
+    
+        attempts++;
+    
+        console.log(`[P${proxyIndex}] Timeout retry ${attempts}/${MAX_529_RETRIES} for ${code}`);
+    
+        if (attempts <= MAX_529_RETRIES) {
+          await new Promise(r => setTimeout(r, 500 + Math.random() * 1000));
+          continue;
+        }
+    
+      }
+    
       globalStats.done++;
       globalStats.other++;
+    
       console.log(`\x1b[35m[P${proxyIndex}][${code}] → ERROR (${err.message})\x1b[0m`);
+    
       return;
     }
   }
@@ -606,10 +628,6 @@ async function runProxyWorker(prefix, proxyIndex) {
         await new Promise(r => setTimeout(r, 100));
         continue;
       }
-  
-      const i = codeIndex++;
-  
-      if (i >= codes.length) break;
   
       let ctx;
   
