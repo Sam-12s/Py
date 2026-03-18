@@ -10,7 +10,7 @@ const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
 let STOP_FLAG = false;
 let HARD_SHUTDOWN = false;
-
+const GLOBAL_RETRY_QUEUE = [];
 let globalStats = {
   ok: 0,
   forbidden: 0,
@@ -456,7 +456,7 @@ async function fetchCode(ctx, code, proxyIndex, recovery) {
   if (HARD_SHUTDOWN || STOP_FLAG) return;
 
   const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 71 });
-  const MAX_529_RETRIES = 30;
+  const MAX_529_RETRIES = 6;
   let attempts = 0;
 
   while (attempts <= MAX_529_RETRIES) {
@@ -551,44 +551,52 @@ async function fetchCode(ctx, code, proxyIndex, recovery) {
     
       console.log(`\x1b[35m[P${proxyIndex}][${code}] → ERROR (${err.message})\x1b[0m`);
     
-      return;
+      GLOBAL_RETRY_QUEUE.push({
+      code,
+      tried: new Set([proxyIndex])
+    });
+    return;
     }
   }
 
   console.log(`\x1b[31m[P${proxyIndex}][${code}] → 529 MAX RETRIES EXHAUSTED\x1b[0m`);
+  GLOBAL_RETRY_QUEUE.push({
+  code,
+  tried: new Set([proxyIndex])
+});
 }
 
 // ============================================================
 // PROXY WORKER — one proxy handles one prefix with N contexts
 // ============================================================
 async function runProxyWorker(prefix, proxyIndex, start, end) {
-  let retryQueue = [];
-  let RESTARTING = false;
-  let REQUEST_COUNTER = 0;
-  const RESTART_THRESHOLD = 5000;
   const proxy = getProxy(proxyIndex);
   const allCodes = generateCodes(prefix);
 
-  // split workload
+  // Split workload per proxy
   const perProxy = Math.ceil(allCodes.length / TOTAL_PROXIES);
-  
   const startIdx = proxyIndex * perProxy;
   const endIdx = Math.min(startIdx + perProxy, allCodes.length);
-  
+
   const codes = allCodes.slice(startIdx, endIdx);
   let codeIndex = 0;
 
   let browser;
+
+  // =========================
+  // LAUNCH BROWSER
+  // =========================
   try {
     browser = await chromium.launch({
       headless: true,
-      proxy: { server: proxy.server, username: proxy.username, password: proxy.password },
+      proxy: {
+        server: proxy.server,
+        username: proxy.username,
+        password: proxy.password
+      },
       args: [
         "--disable-blink-features=AutomationControlled",
         "--no-sandbox",
-        "--disable-web-security",
-        "--disable-features=VizDisplayCompositor",
-        "--disable-gpu",
         "--disable-dev-shm-usage"
       ]
     });
@@ -596,143 +604,153 @@ async function runProxyWorker(prefix, proxyIndex, start, end) {
     console.log(`\x1b[31m[P${proxyIndex}] Browser launch failed: ${err.message}\x1b[0m`);
     return;
   }
-  async function restartBrowserAndPool() {
 
-  console.log(`♻ Restarting browser for proxy ${proxyIndex}`);
-
-  try { await pool.close(); } catch {}
-  try { await browser.close(); } catch {}
-
-  browser = await chromium.launch({
-    headless: true,
-    proxy: { server: proxy.server, username: proxy.username, password: proxy.password },
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      "--no-sandbox"
-    ]
-  });
-
-  await pool.rebuild(browser);
-
-}
-  async function recoverFrom403() {
-
-  console.log(`🚨 Proxy ${proxyIndex} blocked — rebuilding browser`);
-
-  try { await pool.close(); } catch {}
-  try { await browser.close(); } catch {}
-
-  browser = await chromium.launch({
-    headless: true,
-    proxy: { server: proxy.server, username: proxy.username, password: proxy.password },
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      "--no-sandbox"
-    ]
-  });
-
-  await pool.rebuild(browser);
-
-  recovery.BLOCKED_COUNT = 0;
-  recovery.RECOVERING_403 = false;
-
-  console.log(`✅ Proxy ${proxyIndex} recovered`);
-
-}
-  const recovery = {
-  BLOCKED_COUNT: 0,
-  BLOCK_THRESHOLD: 20,
-  RECOVERING_403: false,
-  recoverFrom403
-};
-  // Create N contexts for this proxy
+  // =========================
+  // CONTEXT POOL
+  // =========================
   const pool = new ContextPool(browser, CONTEXTS_PER_PROXY);
   await pool.init();
 
-  console.log(`🚀 [P${proxyIndex}] Starting prefix "${prefix}" with ${CONTEXTS_PER_PROXY} contexts, ${codes.length} codes`);
+  // =========================
+  // RECOVERY SYSTEM
+  // =========================
+  const recovery = {
+    BLOCKED_COUNT: 0,
+    BLOCK_THRESHOLD: 20,
+    RECOVERING_403: false,
 
-  // Run all contexts in parallel
+    async recoverFrom403() {
+      console.log(`🚨 [P${proxyIndex}] Proxy blocked → rebuilding`);
+
+      try { await pool.close(); } catch {}
+      try { await browser.close(); } catch {}
+
+      browser = await chromium.launch({
+        headless: true,
+        proxy: {
+          server: proxy.server,
+          username: proxy.username,
+          password: proxy.password
+        }
+      });
+
+      await pool.rebuild(browser);
+
+      this.BLOCKED_COUNT = 0;
+      this.RECOVERING_403 = false;
+
+      console.log(`✅ [P${proxyIndex}] Recovery complete`);
+    }
+  };
+
+  console.log(`🚀 [P${proxyIndex}] Prefix "${prefix}" | ${codes.length} codes`);
+
+  // =========================
+  // SMART RETRY PICK
+  // =========================
+  function getNextCode() {
+    let item;
+
+    // 🔁 PRIORITY → GLOBAL RETRY
+    let loops = GLOBAL_RETRY_QUEUE.length;
+
+    while (loops-- > 0) {
+      const candidate = GLOBAL_RETRY_QUEUE.shift();
+
+      // 🧠 Drop if exhausted
+      if (candidate.tried.size >= TOTAL_PROXIES) {
+        continue;
+      }
+
+      // ✅ Use if not tried by this proxy
+      if (!candidate.tried.has(proxyIndex)) {
+        candidate.tried.add(proxyIndex);
+        item = candidate;
+        break;
+      }
+
+      // 🔁 put back
+      GLOBAL_RETRY_QUEUE.push(candidate);
+    }
+
+    if (item) return item;
+
+    // 📦 Normal queue
+    if (codeIndex >= codes.length) return null;
+
+    return {
+      code: codes[codeIndex++],
+      tried: new Set([proxyIndex])
+    };
+  }
+
+  // =========================
+  // CONTEXT WORKER
+  // =========================
   async function contextWorker(workerId) {
-  
-    while (!HARD_SHUTDOWN && !ALL_PREFIXES_DONE) { {
-  
-      if (codeIndex >= codes.length && retryQueue.length === 0) break;
-  
+    while (!HARD_SHUTDOWN && !ALL_PREFIXES_DONE) {
+
       if (recovery.RECOVERING_403) {
         await new Promise(r => setTimeout(r, 100));
         continue;
       }
-  
-      let ctx;
-  
+
+      const ctx = await pool.acquire();
+
       try {
-        ctx = await pool.acquire();
-  
         const BATCH = 6;
         const tasks = [];
-  
-        for (let b = 0; b < BATCH; b++) {
-  
-          const idx = codeIndex++;
-          if (idx >= codes.length) break;
-  
-          const code = codes[idx];
-  
+
+        for (let i = 0; i < BATCH; i++) {
+
+          const item = getNextCode();
+          if (!item) break;
+
+          const { code } = item;
+
           tasks.push(
             fetchCode(ctx, code, proxyIndex, recovery)
               .catch(() => {
-                retryQueue.push(code);
+                // 🔥 SMART REQUEUE
+                GLOBAL_RETRY_QUEUE.push(item);
               })
           );
         }
-  
+
+        if (tasks.length === 0) {
+          pool.release(ctx);
+          break;
+        }
+
         await Promise.all(tasks);
-  
+
+      } catch (err) {
+        console.log(`[P${proxyIndex}] Worker error: ${err.message}`);
       } finally {
-        pool.release(ctx);
+        
       }
-    }
-  
-    // ✅ ✅ ✅ PLACE IT RIGHT HERE (OUTSIDE LOOP)
-  
-    while (retryQueue.length > 0 && !HARD_SHUTDOWN && !ALL_PREFIXES_DONE) {
-    
-      const ctx = await pool.acquire(); // ✅ new context per chunk
-    
-      try {
-        const chunk = retryQueue.splice(0, 50);
-    
-        await Promise.all(
-          chunk.map(async (code) => {
-            try {
-              await fetchCode(ctx, code, proxyIndex, recovery);
-            } catch {
-              retryQueue.push(code);
-            }
-          })
-        );
-    
-      } finally {
-        pool.release(ctx); // ✅ release after chunk
-      }
-    
-      // ✅ small cooldown
-      await new Promise(r => setTimeout(r, 50));
     }
   }
+
+  // =========================
+  // START WORKERS
+  // =========================
   const workers = [];
 
   for (let i = 0; i < CONTEXTS_PER_PROXY; i++) {
     workers.push(contextWorker(i));
   }
-  
+
   await Promise.all(workers);
 
+  // =========================
+  // CLEANUP
+  // =========================
+  try { await pool.close(); } catch {}
   try { await browser.close(); } catch {}
 
-  console.log(`✅ [P${proxyIndex}] Prefix "${prefix}" complete`);
+  console.log(`✅ [P${proxyIndex}] DONE`);
 }
-
 // ============================================================
 // RUNTIME WATCHDOG
 // ============================================================
