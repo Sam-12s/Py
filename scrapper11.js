@@ -1,84 +1,230 @@
-const MAX_CONTEXTS = 50;        // real concurrency
+// ============================================================
+// DISTRIBUTED SCRAPER v2 — 200 PROXIES × N CONTEXTS
+// ============================================================
+
+const CONTEXTS_PER_PROXY = 2;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
-const MAX_RUNTIME_MINUTES = 352;
-let REQUEST_COUNTER = 0;
-const RESTART_THRESHOLD = 2500;
-let RESTARTING = false;
-let RESTART_REQUESTED = false;
-let RECOVERING_403 = false;
-let BROWSER_GENERATION = 0;
-let POOL_GENERATION = 0;
-let IN_FLIGHT = 0;
-const BLOCKED_QUEUE = new Set();
+const MAX_RUNTIME_MINUTES = 356;
 const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
-const xml2js = require("xml2js");
 let STOP_FLAG = false;
-let BLOCKED_CODE = null;
-let DEBUG_COUNTER = 0;
 let HARD_SHUTDOWN = false;
-let stats = {
+
+let globalStats = {
   ok: 0,
   forbidden: 0,
   other: 0,
-  done: 0
+  done: 0,
+  retries_529: 0
 };
 
-let GLOBAL_PAUSE = false;
+const { chromium } = require("playwright");
 
+// ============================================================
+// PROXY GENERATION — 200 proxies, ports 10001–10200
+// ============================================================
+const PROXY_USERNAME = "spfsvdt89u";
+const PROXY_PASSWORD = "f25gv0_jbagu1ZPLMb";
+const PROXY_HOST = "dc.decodo.com";
+const START_PORT = 10001;
+const END_PORT = 10200;
+const TOTAL_PROXIES = END_PORT - START_PORT + 1; // 200
 
-async function waitIfPaused() {
-  if (!GLOBAL_PAUSE) return;
-  while (GLOBAL_PAUSE) {
-    await new Promise(r => setTimeout(r, 50));
+function getProxy(index) {
+  const port = START_PORT + index;
+  return {
+    server: `http://${PROXY_HOST}:${port}`,
+    username: PROXY_USERNAME,
+    password: PROXY_PASSWORD
+  };
+}
+
+// ============================================================
+// PREFIX GENERATION & SHUFFLE
+// ============================================================
+const SUFFIX_CHARS = [
+  "0","1","2","3","4","5","6","7","8","9",
+  "A","B","C","D","E","F","G","H",
+  "J","K","L","M","N",
+  "P","Q","R","S","T","U","V","W","X","Y","Z"
+];
+
+function generateAllPrefixes() {
+  const prefixes = [];
+  const FIRST_CHAR = "2";
+
+  for (const b of SUFFIX_CHARS) {
+    prefixes.push(`${FIRST_CHAR}${b}`);
+  }
+
+  return prefixes; // 34 prefixes
+}
+
+function shuffle(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
   }
 }
 
-const { google } = require("googleapis");
+function generateCodes(prefix) {
+  const out = [];
+  for (const a of SUFFIX_CHARS) {
+    for (const b of SUFFIX_CHARS) {
+      for (const c of SUFFIX_CHARS) {
+        out.push(`${prefix}${a}${b}${c}`);
+      }
+    }
+  }
+  return out; // 34^3 = 39304
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function generateXHD() {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  for (let i = 0; i < 256; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
+
+function randomContextOptions() {
+  const userAgents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) Chrome/125.0.0.0",
+    "Mozilla/5.0 (X11; Linux x86_64) Firefox/118.0",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1"
+  ];
+  const timezones = ["America/New_York","Europe/London","Africa/Lagos","Europe/Paris","Asia/Singapore"];
+  return {
+    userAgent: userAgents[Math.floor(Math.random() * userAgents.length)],
+    viewport: {
+      width: 1100 + Math.floor(Math.random() * 500),
+      height: 700 + Math.floor(Math.random() * 400)
+    },
+    locale: ["en-US", "en-GB", "fr-FR"][Math.floor(Math.random() * 3)],
+    timezoneId: timezones[Math.floor(Math.random() * timezones.length)],
+    deviceScaleFactor: [1, 1.25, 1.5][Math.floor(Math.random() * 3)],
+    colorScheme: Math.random() > 0.5 ? "dark" : "light"
+  };
+}
+class ContextPool {
+  constructor(browser, size) {
+    this.browser = browser;
+    this.size = size;
+    this.pool = [];
+    this.queue = [];
+    this.generation = 0;
+  }
+
+  async init() {
+    for (let i = 0; i < this.size; i++) {
+      const ctx = await this.browser.newContext(randomContextOptions());
+      ctx.__poolGen = this.generation;
+
+      this.pool.push(ctx);
+      this.queue.push(ctx);
+    }
+  }
+
+  async acquire() {
+    while (this.queue.length === 0 && !HARD_SHUTDOWN) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+
+    const ctx = this.queue.pop();
+    return ctx;
+  }
+
+  release(ctx) {
+    if (!ctx) return;
+
+    if (ctx.__poolGen === this.generation) {
+      this.queue.push(ctx);
+    } else {
+      ctx.close().catch(()=>{});
+    }
+  }
+
+  async close() {
+    for (const ctx of this.pool) {
+      try { await ctx.close(); } catch {}
+    }
+  }
+
+  async rebuild(browser) {
+    this.generation++;
+
+    await this.close();
+
+    this.browser = browser;
+    this.pool = [];
+    this.queue = [];
+
+    await this.init();
+  }
+}
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0"
+];
+
+const SEC_CH_UA = [
+  '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+  '"Not_A Brand";v="99", "Google Chrome";v="120", "Chromium";v="120"',
+  '"Chromium";v="120", "Not_A Brand";v="8", "Google Chrome";v="120"'
+];
+
+// ============================================================
+// GOOGLE DRIVE UPLOAD
+// ============================================================
+const nodemailer = require("nodemailer");
 const fs = require("fs");
 
-async function uploadDbToDrive() {
+async function sendDbViaGmail() {
   const dbPath = "OUTPUT.db";
-  if (!fs.existsSync(dbPath)) return;
 
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.GDRIVE_CLIENT_ID,
-    process.env.GDRIVE_CLIENT_SECRET
-  );
+  if (!fs.existsSync(dbPath)) {
+    console.log("📭 OUTPUT.db not found. No email sent.");
+    return;
+  }
 
-  oauth2Client.setCredentials({
-    refresh_token: process.env.GDRIVE_REFRESH_TOKEN
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: "1btcryptopayment@gmail.com",
+      pass: "zjti bewf hoib dteb"
+    }
   });
 
-  const drive = google.drive({ version: "v3", auth: oauth2Client });
-
-  const fileMetadata = {
-    name: "OUTPUT.db",
-    parents: ["1GJ13uUpHRvY0uEAZbXbhL4S1YNTjU7NR"]  // Optional: put in a folder
-  };
-
-  const media = {
-    mimeType: "application/x-sqlite3",
-    body: fs.createReadStream(dbPath)
-  };
-
-  await drive.files.create({
-    resource: fileMetadata,
-    media: media,
-    fields: "id"
+  await transporter.sendMail({
+    from: "1btcryptopayment@gmail.com",
+    to: "tidianeyonkeu515@gmail.com",
+    subject: "Scraper Output DB",
+    text: "Attached is the OUTPUT.db generated by the script.",
+    attachments: [
+      {
+        filename: "OUTPUT.db",
+        path: dbPath
+      }
+    ]
   });
 
-  console.log("✅ Database uploaded to My Drive");
+  console.log("📧 OUTPUT.db sent successfully via Gmail.");
 }
+// ============================================================
+// DATABASE WORKER
+// ============================================================
 const { Worker, isMainThread, parentPort, workerData } = require("worker_threads");
 
 if (!isMainThread && workerData === "DB_WORKER") {
-  // ==========================
-  // DATABASE WORKER
-  // ==========================
   const db = new Database("OUTPUT.db");
-
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
@@ -108,421 +254,95 @@ if (!isMainThread && workerData === "DB_WORKER") {
   `);
 
   let buffer = [];
-
   function flush() {
     if (buffer.length === 0) return;
-    const tx = db.transaction(rows => {
-      for (const r of rows) insert.run(...r);
-    });
+    const tx = db.transaction(rows => { for (const r of rows) insert.run(...r); });
     tx(buffer);
     buffer = [];
   }
 
   parentPort.on("message", msg => {
-    if (msg === "flush") {
-      flush();
-      return;
-    }
+    if (msg === "flush") { flush(); return; }
     buffer.push(msg);
   });
 
   setInterval(flush, 200);
-
+  console.log("🗄️  DB Worker ready");
+  parentPort.postMessage("ready");
   console.log("🗄️  DB Worker ready");
   return;
 }
 
-// ==========================
+// ============================================================
 // MAIN THREAD
-// ==========================
+// ============================================================
 let dbWorker;
+let dbReadyPromise;
+
 if (isMainThread) {
   dbWorker = new Worker(__filename, { workerData: "DB_WORKER" });
+
+  dbReadyPromise = new Promise((resolve) => {
+    dbWorker.on("message", (msg) => {
+      if (msg === "ready") {
+        resolve();
+      }
+    });
+  });
 }
 
-// Function to log codes to DB worker
 function logCode(label, code, workerId, teams, events, score, times, odds, totalOdds, lastChange) {
-  if (dbWorker) {
-    dbWorker.postMessage([workerId, label, code, teams, events, score, times, odds, totalOdds, lastChange]);
-  }
+
+  if (!dbWorker) return;
+
+  dbWorker.postMessage([
+    workerId,
+    label,
+    code,
+    teams,
+    events,
+    score,
+    times,
+    odds,
+    totalOdds,
+    lastChange
+  ]);
+
+  // force immediate flush for valuable results
+  dbWorker.postMessage("flush");
 }
-// Function to flush DB worker (call on shutdown)
+
 async function flushDbWorker() {
   if (!dbWorker) return;
   dbWorker.postMessage("flush");
-  await new Promise(r => setTimeout(r, 1000)); // give time to flush
+  await new Promise(r => setTimeout(r, 1000));
 }
 
-function runtimeWatchdog(state) {
-  const interval = setInterval(async () => {
-    if (Date.now() >= END_TIME) {
-      console.log("⏰ MAX EXECUTION TIME REACHED — FORCE SHUTDOWN");
-
-      HARD_SHUTDOWN = true;
-      STOP_FLAG = true;
-      GLOBAL_PAUSE = true;
-
-      clearInterval(interval);
-
-      await gracefulShutdown(state);
-    }
-  }, 1000);
-}
-
-async function gracefulShutdown(state) {
-  console.log("🛑 Initiating graceful shutdown...");
-
-  // Stop recovery loop
-  RECOVERING_403 = false;
-  BLOCKED_QUEUE.clear();
-
-  // Wait for in-flight requests
-  while (IN_FLIGHT > 0) {
-    await new Promise(r => setTimeout(r, 50));
-  }
-
-  console.log("🧊 All requests finished");
-
-  // Flush DB worker
-  await flushDbWorker();
-
-  console.log("💾 Database flushed");
-
-  // Close browser safely
-  try { await state.pool.close(); } catch {}
-  try { await state.browser.close(); } catch {}
-
-  console.log("🌐 Browser closed");
-
-  // Upload DB
-  try {
-    await uploadDbToDrive();
-  } catch (err) {
-    console.log("Drive upload failed:", err.message);
-  }
-
-  console.log("☁️ Upload finished");
-  console.log("✅ Safe exit");
-
-  process.exit(0);
-}
-
-function logStatus(code, status) {
+function logStatus(code, status, proxyIndex) {
   let color;
-  let label = status;
+  if (status === 200) { color = "\x1b[32m"; globalStats.ok++; }
+  else if (status === 403) { color = "\x1b[31m"; globalStats.forbidden++; }
+  else if (status === 529) { color = "\x1b[35m"; globalStats.retries_529++; }
+  else { color = "\x1b[33m"; globalStats.other++; }
 
-  if (status === 200) {
-    color = "\x1b[32m"; // green
-    stats.ok++;
-  } else if (status === 403) {
-    color = "\x1b[31m"; // red
-    stats.forbidden++;
-  } else {
-    color = "\x1b[33m"; // yellow
-    stats.other++;
-  }
-
-  stats.done++;
-
+  globalStats.done++;
   console.log(
-    `${color}[${code}] → ${label}\x1b[0m ` +
-    `| DONE ${stats.done}/${TOTAL_PER_PREFIX} ` +
-    `OK=${stats.ok} 403=${stats.forbidden} OTHER=${stats.other}`
+    `${color}[P${proxyIndex}][${code}] → ${status}\x1b[0m ` +
+    `| TOTAL=${globalStats.done} OK=${globalStats.ok} 403=${globalStats.forbidden} 529r=${globalStats.retries_529} OTHER=${globalStats.other}`
   );
 }
 
-const SUFFIX_CHARS = ["0","1","2","3","4","5","6","7","8","9","A","B","C","D","E","F","G","H","J","K","L","M","N","P","Q","R","S","T","U","V","W","X","Y","Z"];
-
-function generateCodes(prefix) {
-  const out = [];
-
-  for (const a of SUFFIX_CHARS) {
-    for (const b of SUFFIX_CHARS) {
-      for (const c of SUFFIX_CHARS) {
-        out.push(`${prefix}${a}${b}${c}`);
-      }
-    }
-  }
-
-  return out;
-}
-
-function randomContextOptions() {
-  const userAgents = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) Chrome/125.0.0.0",
-    "Mozilla/5.0 (X11; Linux x86_64) Firefox/118.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1"
-  ];
-
-  const timezones = [
-    "America/New_York",
-    "Europe/London",
-    "Africa/Lagos",
-    "Europe/Paris",
-    "Asia/Singapore"
-  ];
-
-  return {
-    userAgent: userAgents[Math.floor(Math.random() * userAgents.length)],
-    viewport: {
-      width: 1100 + Math.floor(Math.random() * 500),
-      height: 700 + Math.floor(Math.random() * 400)
-    },
-    locale: ["en-US", "en-GB", "fr-FR"][Math.floor(Math.random() * 3)],
-    timezoneId: timezones[Math.floor(Math.random() * timezones.length)],
-    deviceScaleFactor: [1, 1.25, 1.5][Math.floor(Math.random() * 3)],
-    colorScheme: Math.random() > 0.5 ? "dark" : "light"
-  };
-}
-
-class ContextPool {
-  constructor(browser, size) {
-    this.browser = browser;
-    this.size = size;
-    this.pool = [];
-    this.queue = [];
-  }
-
-  async init() {
-    for (let i = 0; i < this.size; i++) {
-      const ctx = await this.browser.newContext(randomContextOptions());
-      this.pool.push(ctx);
-      this.queue.push(ctx);
-    }
-  }
-
-  async acquire() {
-  while (this.queue.length === 0 && !STOP_FLAG) {
-    await new Promise(r => setTimeout(r, 5));
-  }
-
-  if (STOP_FLAG) throw new Error("Pool stopped");
-
-  const ctx = this.queue.pop();
-  ctx.__poolGen = POOL_GENERATION;   // 🔑
-  return ctx;
-}
-
-
-
-
-  release(ctx) {
-    this.queue.push(ctx);
-  }
-
-  async close() {
-    for (const ctx of this.pool) {
-      await ctx.close();
-    }
-  }
-}
-
-async function restartBrowserAndPool(state) {
-  if (RESTARTING) return;
-
-  RESTARTING = true;
-
-  console.log("\n🔄 SAFE RESTART (waiting workers idle)...\n");
-
-  // allow in-flight requests to finish
-  await new Promise(r => setTimeout(r, 200));
-
-  await state.pool.close();
-  await state.browser.close();
-
-  state.browser = await chromium.launch({
-    headless: true,
-    args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
-  });
-
-  state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
-  await state.pool.init();
-
-  REQUEST_COUNTER = 0;
-
-  console.log("✅ Restart complete\n");
-
-  RESTARTING = false;
-}
-
-async function fetchCode(ctx, code, state) {
-
-  // ⛔ hard pause barrier
-  await waitIfPaused();
-
-  // 🚫 reject stale contexts
-  if (ctx.__poolGen !== POOL_GENERATION) {
-    return "STALE";
-  }
-
-  IN_FLIGHT++; // 🔒 mark request active
-
-  try {
-    await waitIfPaused(); // double guard
-
-    const resp = await ctx.request.get(
-      `https://www.sportybet.com/api/ng/orders/share/${code}`,
-      {
-        timeout: 30000,
-        headers: {
-          "Accept": "application/json, text/plain, */*",
-          "Referer": "https://www.sportybet.com/en"
-        }
-      }
-    );
-
-    const status = resp.status();
-
-    // 🚨 403 HANDLING (QUEUE, NOT OVERWRITE)
-    if (status === 403) {
-      BLOCKED_QUEUE.add(code);
-      logStatus(code, 403);
-
-      console.log("🚨 403 detected — queued for recovery");
-
-      try { await ctx.close(); } catch {}
-
-      recoverFrom403(state);
-      return "403";
-    }
-
-    // ❌ non-200
-    if (status !== 200) {
-      logStatus(code, status);
-      return;
-    }
-
-    // ✅ success
-    
-
-try {
-    const contentType = resp.headers()["content-type"] || "";
-    const text = await resp.text();
-
-    // ==========================
-    // JSON RESPONSE
-    // ==========================
-    if (contentType.includes("application/json")) {
-        let jsonObj;
-        try {
-            jsonObj = JSON.parse(text);
-        } catch (e) {
-            console.log(`[${code}] JSON parse error`);
-            return;
-        }
-
-        await processResponse(jsonObj, code, "JS");
-        return;
-    }
-
-    // ==========================
-    // XML RESPONSE (Python Equivalent)
-    // ==========================
-    if (text.startsWith("<BaseRsp")) {
-
-        const parser = new xml2js.Parser({
-            explicitArray: false,
-            mergeAttrs: true
-        });
-
-        let result;
-        try {
-            result = await parser.parseStringPromise(text);
-        } catch (err) {
-            console.log(`[${code}] XML parse failed`);
-            return;
-        }
-
-        const message = result?.BaseRsp?.message;
-        if (message !== "Success") {
-            return;
-        }
-
-        let outcomes = result?.BaseRsp?.data?.outcomes?.outcomes;
-        if (!outcomes) return;
-
-        if (!Array.isArray(outcomes)) {
-            outcomes = [outcomes];
-        }
-
-        // Convert XML structure to JSON-like format
-        const normalized = {
-            message: "Success",
-            data: {
-                outcomes: outcomes.map(o => ({
-                    matchStatus: o.matchStatus,
-                    estimateStartTime: Number(o.estimateStartTime),
-                    homeTeamName: o.homeTeamName,
-                    awayTeamName: o.awayTeamName,
-                    sport: {
-                        name: o?.sport?.name,
-                        category: {
-                            name: o?.sport?.category?.name
-                        }
-                    },
-                    markets: [{
-                        desc: o?.markets?.markets?.desc,
-                        lastOddsChangeTime: Number(o?.markets?.markets?.lastOddsChangeTime),
-                        outcomes: [{
-                            desc: o?.markets?.markets?.outcomes?.outcomes?.desc,
-                            odds: Number(o?.markets?.markets?.outcomes?.outcomes?.odds)
-                        }]
-                    }]
-                }))
-            }
-        };
-
-        await processResponse(normalized, code, "XML");
-        return;
-    }
-
-    console.log(`[${code}] Unknown response format`);
-} catch (err) {
-    console.log(`[${code}] Response handling error: ${err.message}`);
-}
-finally {
-      try { resp.dispose?.(); } catch {}
-    }
-
-  } catch (err) {
-    stats.done++;
-    stats.other++;
-    console.log(
-      `\x1b[35m[${code}] → ERROR (${err.message})\x1b[0m | DONE ${stats.done}/${TOTAL_PER_PREFIX}`
-    );
-  } finally {
-    IN_FLIGHT--; // 🔓 request finished
-  }
-
-  REQUEST_COUNTER++;
-}
-
-
-
+// ============================================================
+// PROCESS RESPONSE
+// ============================================================
 function processResponse(response, local_code, session_id = "JS") {
   if (!response) return false;
+  if (response.Success !== true) return "INVALID";
 
-  if (response.message === "The code is invalid.") {
-
-    return "INVALID";
-  }
-
-  if (response.message !== "Success") {
-
-    return false;
-  }
-
-  const pg = response.data?.outcomes;
-  if (!pg) return false;
+  const pg = response.Value?.Events;
+  if (!pg || pg.length === 0) return false;
 
   const number_of_event = pg.length;
-  if (number_of_event === 0) {
-
-    return "VALID";
-  }
-
-  // --- Memory-safe arrays ---
   const events_status = [];
   const datetimestamp = [];
   const match_date = [];
@@ -534,24 +354,20 @@ function processResponse(response, local_code, session_id = "JS") {
   const lst_teams = [];
   const lst_change = [];
   const lst_match_oddchanges = [];
-  const lst_type = [];
 
   const today_date = new Date().toDateString();
 
   try {
     for (let i = 0; i < number_of_event; i++) {
       const e = pg[i];
-
-      // Directly push primitive values to arrays
-      events_status.push(e.matchStatus);
-      datetimestamp.push(Number(e.estimateStartTime));
-      odds.push(Number(e.markets[0].outcomes[0].odds));
-      sports.push(String(e.sport.name));
-      lst_type.push(String(e.sport.category.name));
-      lst_events.push(String(e.markets[0].desc));
-      lst_scores.push(String(e.markets[0].outcomes[0].desc));
-      lst_teams.push(`${e.homeTeamName} vs ${e.awayTeamName}`);
-      lst_change.push(Number(e.markets[0].lastOddsChangeTime));
+      events_status.push(e.Finish === false);
+      datetimestamp.push(Number(e.Start) * 1000);
+      odds.push(Number(e.Coef));
+      sports.push(String(e.SportNameEng));
+      lst_events.push(String(e.GroupName));
+      lst_scores.push(String(e.MarketName));
+      lst_teams.push(`${e.Opp1} vs ${e.Opp2}`);
+      lst_change.push(Number(e.Start));
     }
 
     for (const ts of datetimestamp) {
@@ -578,267 +394,416 @@ function processResponse(response, local_code, session_id = "JS") {
     const teams = lst_teams.join("|");
 
     if (
-      events_status.every(s => ["Not start","H1"].includes(s)) &&
+      events_status.every(s => s === true) &&
       match_date.every(d => d === today_date) &&
-      lst_type.every(t => t !== "Simulated Reality League") &&
       sports.every(s => s === "Football")
     ) {
       if (number_of_event === 4 && total_result > 100 && total_result < 200) {
         logCode("QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
         return "VALID";
-      } else if (number_of_event === 3 && total_result > 18 && total_result < 200) {
-        logCode("TRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
-        return "VALID";
-      } else if (number_of_event === 2 && total_result > 25 && total_result < 180 &&
-                 lst_events.every(e => e === "Correct Score")) {
-        logCode("DOUBLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
-        return "VALID";
-      } else if (number_of_event === 1 && total_result > 5 && total_result < 30 &&
-                 lst_events.every(e => e === "Correct Score")) {
-        logCode("SINGLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
-        return "VALID";
-      }
-    } else {
-
+      } 
     }
   } catch (err) {
     console.log(err, `1----${local_code}`);
   } finally {
-    // --- Memory cleanup ---
-    [pg, events_status, datetimestamp, match_date, odds, sports,
+    [events_status, datetimestamp, match_date, odds, sports,
      lst_events, lst_match_time, lst_scores, lst_teams,
-     lst_change, lst_match_oddchanges, lst_type].forEach(arr => { if (Array.isArray(arr)) arr.length = 0; });
-
+     lst_change, lst_match_oddchanges].forEach(arr => { arr.length = 0; });
     global.gc?.();
   }
-
   return false;
 }
 
-async function runPrefix(state, prefix) {
-  const codes = generateCodes(prefix);
-  let index = 0;
+// ============================================================
+// RESOURCE BLOCKING — reduce data traffic ~80%
+// ============================================================
+async function blockResources(page) {
+  await page.route('**/*', (route) => {
+    const type = route.request().resourceType();
+    if (['image', 'stylesheet', 'font', 'media', 'manifest', 'other'].includes(type)) {
+      return route.abort();
+    }
+    return route.continue();
+  });
+}
 
-  async function worker(workerId) {
-    while (true) {
+// ============================================================
+// BUILD HEADERS
+// ============================================================
+function buildHeaders() {
+  return {
+    "accept": "application/json, text/plain, */*",
+    "content-type": "application/json",
+    "is-srv": "false",
+    "Referer": "https://indi-1xbet.com/en",
+    "Origin": "https://indi-1xbet.com",
+    "sec-ch-ua": SEC_CH_UA[Math.floor(Math.random() * SEC_CH_UA.length)],
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": ['"Windows"', '"macOS"', '"Linux"'][Math.floor(Math.random() * 3)],
+    "user-agent": USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)],
+    "x-app-n": "__BETTING_APP__",
+    "x-hd": generateXHD(),
+    "x-mobile-project-id": "0",
+    "x-requested-with": "XMLHttpRequest",
+    "x-svc-source": "__BETTING_APP__"
+  };
+}
 
-      // ⏸ pause during recovery
-      while (STOP_FLAG || RECOVERING_403) {
-        await new Promise(r => setTimeout(r, 50));
-      }
+// ============================================================
+// FETCH CODE — with 529 immediate retry (per-context)
+// ============================================================
+async function fetchCode(ctx, code, proxyIndex, recovery) {
+  if (HARD_SHUTDOWN || STOP_FLAG) return;
 
-      const i = index++;
-      if (i >= codes.length) break;
+  const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 71 });
+  const MAX_529_RETRIES = 30;
+  let attempts = 0;
 
-      let ctx;
-      try {
-        ctx = await state.pool.acquire();
-      } catch {
+  while (attempts <= MAX_529_RETRIES) {
+    try {
+      const resp = await ctx.request.post(
+        `https://indi-1xbet.com/service-api/LiveBet/Open/GetCoupon`,
+        {
+          timeout: 30000,
+          headers: buildHeaders(),
+          data: payload
+        }
+      );
+
+      const status = resp.status();
+
+      // 529 — immediate retry within this context
+      if(status === 529 || status === 503) {
+        attempts++;
+        logStatus(code, 529, proxyIndex);
+        console.log(`  ↻ 529 retry ${attempts}/${MAX_529_RETRIES} for ${code}`);
+        await new Promise(r => setTimeout(r, 200 * (attempts + 1)));
+        try { resp.dispose?.(); } catch {}
         continue;
       }
 
-      try {
-        const result = await fetchCode(ctx, codes[i], state);
+      // 403 — log and skip
+      if (status === 403) {
+      
+        recovery.BLOCKED_COUNT++;
+      
+        logStatus(code, 403, proxyIndex);
+      
+        if (recovery.BLOCKED_COUNT >= recovery.BLOCK_THRESHOLD && !recovery.RECOVERING_403) {
+      
+          recovery.RECOVERING_403 = true;
+      
+          await recovery.recoverFrom403();
+      
+        }
+      
+        return;
+      }
 
-        // 🔁 stale → retry with fresh context
-        if (result === "STALE") {
+      // non-200
+      if (status !== 200) {
+        logStatus(code, status, proxyIndex);
+        try { resp.dispose?.(); } catch {}
+        return;
+      }
+
+      // 200
+      logStatus(code, 200, proxyIndex);
+
+      try {
+        const contentType = resp.headers()["content-type"] || "";
+        const text = await resp.text();
+
+        if (contentType.includes("application/json")) {
+          let jsonObj;
+          try { jsonObj = JSON.parse(text); } catch (e) {
+            console.log(`[${code}] JSON parse error`);
+            return;
+          }
+          await processResponse(jsonObj, code, `P${proxyIndex}`);
+        } else {
+          console.log(`[${code}] Unknown format: ${contentType}`);
+        }
+      } catch (err) {
+        console.log(`[${code}] Response error: ${err.message}`);
+      } finally {
+        try { resp.dispose?.(); } catch {}
+      }
+
+      return;
+
+    } catch (err) {
+      if (err.message.includes("Timeout")) {
+    
+        attempts++;
+    
+        console.log(`[P${proxyIndex}] Timeout retry ${attempts}/${MAX_529_RETRIES} for ${code}`);
+    
+        if (attempts <= MAX_529_RETRIES) {
+          await new Promise(r => setTimeout(r, 500 + Math.random() * 1000));
           continue;
         }
-
-      } catch (err) {
-        console.log(`[${codes[i]}] Worker error: ${err.message}`);
-      } finally {
-
-        // ✅ only return valid contexts
-        if (ctx && ctx.__poolGen === POOL_GENERATION) {
-          try {
-            state.pool.release(ctx);
-          } catch {}
-        } else {
-          try {
-            await ctx?.close();
-          } catch {}
-        }
+    
       }
+    
+      globalStats.done++;
+      globalStats.other++;
+    
+      console.log(`\x1b[35m[P${proxyIndex}][${code}] → ERROR (${err.message})\x1b[0m`);
+    
+      return;
     }
   }
 
-  // 🚀 spawn workers
-  const workers = [];
-  for (let i = 0; i < MAX_CONTEXTS; i++) {
-    workers.push(worker(i));
-  }
-
-  await Promise.all(workers);
+  console.log(`\x1b[31m[P${proxyIndex}][${code}] → 529 MAX RETRIES EXHAUSTED\x1b[0m`);
 }
 
+// ============================================================
+// PROXY WORKER — one proxy handles one prefix with N contexts
+// ============================================================
+async function runProxyWorker(prefix, proxyIndex, start, end) {
+  let retryQueue = [];
+  let RESTARTING = false;
+  let REQUEST_COUNTER = 0;
+  const RESTART_THRESHOLD = 5000;
+  const proxy = getProxy(proxyIndex);
+  const allCodes = generateCodes(prefix);
 
-// --------------------
-// STOP ALL WORKERS UTILITY
-// --------------------
-async function stopAllWorkers(state) {
-  console.log("⏸ Pausing workers...");
+  // split workload
+  const perProxy = Math.ceil(allCodes.length / TOTAL_PROXIES);
+  
+  const startIdx = proxyIndex * perProxy;
+  const endIdx = Math.min(startIdx + perProxy, allCodes.length);
+  
+  const codes = allCodes.slice(startIdx, endIdx);
+  let codeIndex = 0;
 
-  STOP_FLAG = true;
-
-  const start = Date.now();
-  const MAX_WAIT = 5000; // give in-flight requests up to 15s to finish
-
-  while (Date.now() - start < MAX_WAIT) {
-    const returned = state.pool.queue.length;
-    const total = state.pool.size;
-
-    console.log(`Waiting contexts: ${returned}/${total}`);
-
-    if (returned >= total) break;
-
-    await new Promise(r => setTimeout(r, 250));
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      proxy: { server: proxy.server, username: proxy.username, password: proxy.password },
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        "--no-sandbox",
+        "--disable-web-security",
+        "--disable-features=VizDisplayCompositor",
+        "--disable-gpu",
+        "--disable-dev-shm-usage"
+      ]
+    });
+  } catch (err) {
+    console.log(`\x1b[31m[P${proxyIndex}] Browser launch failed: ${err.message}\x1b[0m`);
+    return;
   }
+  async function restartBrowserAndPool() {
 
-  console.log(
-    `All contexts returned: ${state.pool.queue.length}/${state.pool.size}`
-  );
+  console.log(`♻ Restarting browser for proxy ${proxyIndex}`);
 
-  // Extra grace delay for late network responses
-  console.log("⏳ Final grace wait for late responses (2s)...");
-  await new Promise(r => setTimeout(r, 2000));
-}
+  try { await pool.close(); } catch {}
+  try { await browser.close(); } catch {}
 
-// --------------------
-// 403 RECOVERY FUNCTION
-// --------------------
-async function recoverFrom403(state) {
-  if (HARD_SHUTDOWN) return;
-  if (RECOVERING_403) return;
-  RECOVERING_403 = true;
-
-  console.log("🚨 Starting 403 recovery");
-
-  // ⛔ freeze the world
-  GLOBAL_PAUSE = true;
-  STOP_FLAG = true;
-
-  // ⏳ wait for ALL in-flight requests
-  while (IN_FLIGHT > 0) {
-    await new Promise(r => setTimeout(r, 20));
-  }
-
-  console.log("🧊 All in-flight requests completed");
-
-  // 🔥 invalidate all old contexts
-  POOL_GENERATION++;
-
-  // 💣 destroy pool + browser
-  try { await state.pool.close(); } catch {}
-  try { await state.browser.close(); } catch {}
-
-  console.log("♻️ Browser & pool destroyed");
-
-  // 🔄 rebuild
-  state.browser = await chromium.launch({
+  browser = await chromium.launch({
     headless: true,
-    args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+    proxy: { server: proxy.server, username: proxy.username, password: proxy.password },
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox"
+    ]
   });
 
-  state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
-  await state.pool.init();
+  await pool.rebuild(browser);
 
-  console.log("✅ New browser & pool ready");
+}
+  async function recoverFrom403() {
 
-  // 🔁 retry ALL blocked codes safely
-  while (BLOCKED_QUEUE.size > 0) {
-    const codes = [...BLOCKED_QUEUE];
+  console.log(`🚨 Proxy ${proxyIndex} blocked — rebuilding browser`);
 
-    for (const code of codes) {
-      let retryBrowser, retryCtx;
+  try { await pool.close(); } catch {}
+  try { await browser.close(); } catch {}
 
-      try {
-        retryBrowser = await chromium.launch({ headless: true });
-        retryCtx = await retryBrowser.newContext(randomContextOptions());
+  browser = await chromium.launch({
+    headless: true,
+    proxy: { server: proxy.server, username: proxy.username, password: proxy.password },
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox"
+    ]
+  });
 
-        console.log(`🔁 Retrying blocked code ${code}`);
+  await pool.rebuild(browser);
 
-        const resp = await retryCtx.request.get(
-          `https://www.sportybet.com/api/ng/orders/share/${code}`,
-          { timeout: 30000 }
-        );
+  recovery.BLOCKED_COUNT = 0;
+  recovery.RECOVERING_403 = false;
 
-        const status = resp.status();
-        console.log(`Retry status: ${status}`);
-        if (HARD_SHUTDOWN) break;
-        if (status === 200) {
-          console.log(`✅ 403 cleared for ${code}`);
-          BLOCKED_QUEUE.delete(code);
-        }
+  console.log(`✅ Proxy ${proxyIndex} recovered`);
 
-      } catch (err) {
-        console.log(`Retry error for ${code}: ${err.message}`);
-      } finally {
-        try { await retryCtx?.close(); } catch {}
-        try { await retryBrowser?.close(); } catch {}
+}
+  const recovery = {
+  BLOCKED_COUNT: 0,
+  BLOCK_THRESHOLD: 20,
+  RECOVERING_403: false,
+  recoverFrom403
+};
+  // Create N contexts for this proxy
+  const pool = new ContextPool(browser, CONTEXTS_PER_PROXY);
+  await pool.init();
+
+  console.log(`🚀 [P${proxyIndex}] Starting prefix "${prefix}" with ${CONTEXTS_PER_PROXY} contexts, ${codes.length} codes`);
+
+  // Run all contexts in parallel
+  async function contextWorker(workerId) {
+  
+    while (!HARD_SHUTDOWN) {
+  
+      if (codeIndex >= codes.length && retryQueue.length === 0) break;
+  
+      if (recovery.RECOVERING_403) {
+        await new Promise(r => setTimeout(r, 100));
+        continue;
       }
-
-      await new Promise(r => setTimeout(r, 3000)); // cooldown
+  
+      let ctx;
+  
+      try {
+        ctx = await pool.acquire();
+  
+        const BATCH = 6;
+        const tasks = [];
+  
+        for (let b = 0; b < BATCH; b++) {
+  
+          const idx = codeIndex++;
+          if (idx >= codes.length) break;
+  
+          const code = codes[idx];
+  
+          tasks.push(
+            fetchCode(ctx, code, proxyIndex, recovery)
+              .catch(() => {
+                retryQueue.push(code);
+              })
+          );
+        }
+  
+        await Promise.all(tasks);
+  
+      } finally {
+        pool.release(ctx);
+      }
     }
-
-    if (BLOCKED_QUEUE.size > 0) {
-      await new Promise(r => setTimeout(r, 1000));
+  
+    // ✅ ✅ ✅ PLACE IT RIGHT HERE (OUTSIDE LOOP)
+  
+  while (retryQueue.length > 0 && !HARD_SHUTDOWN) {
+  
+    const ctx = await pool.acquire(); // ✅ new context per chunk
+  
+    try {
+      const chunk = retryQueue.splice(0, 50);
+  
+      await Promise.all(
+        chunk.map(async (code) => {
+          try {
+            await fetchCode(ctx, code, proxyIndex, recovery);
+          } catch {
+            retryQueue.push(code);
+          }
+        })
+      );
+  
+    } finally {
+      pool.release(ctx); // ✅ release after chunk
     }
+  
+    // ✅ small cooldown
+    await new Promise(r => setTimeout(r, 50));
   }
+  }
+  const workers = [];
 
-  // ▶ resume everything
-  STOP_FLAG = false;
-  GLOBAL_PAUSE = false;
-  RECOVERING_403 = false;
+  for (let i = 0; i < CONTEXTS_PER_PROXY; i++) {
+    workers.push(contextWorker(i));
+  }
+  
+  await Promise.all(workers);
 
-  console.log("▶ Workers resumed — full concurrency restored");
+  try { await browser.close(); } catch {}
+
+  console.log(`✅ [P${proxyIndex}] Prefix "${prefix}" complete`);
 }
 
+// ============================================================
+// RUNTIME WATCHDOG
+// ============================================================
+function runtimeWatchdog() {
+  const interval = setInterval(async () => {
+    if (Date.now() >= END_TIME) {
+      console.log("⏰ MAX EXECUTION TIME REACHED — FORCE SHUTDOWN");
+      HARD_SHUTDOWN = true;
+      STOP_FLAG = true;
+      clearInterval(interval);
+    }
+  }, 1000);
+}
 
-
-
-
-const { chromium } = require("playwright");
-
+// ============================================================
+// MAIN — SHUFFLED PREFIX LIST, BATCHED BY 200 PROXIES
+// ============================================================
 (async () => {
-
-  
-
   try {
-    const PREFIXES = [
-    "RH3",
-];
+    runtimeWatchdog();
+    await dbReadyPromise;
+    console.log("✅ DB ready, starting scraper...");
+    // Generate all 1156 two-char prefixes and shuffle randomly
+    const ALL_PREFIXES = generateAllPrefixes();
+    shuffle(ALL_PREFIXES);
 
-    const state = {};
-    runtimeWatchdog(state);
-    state.browser = await chromium.launch({
-      headless: true,
-      args: ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
-    });
+    const totalBatches = Math.ceil(ALL_PREFIXES.length / TOTAL_PROXIES);
 
-    state.pool = new ContextPool(state.browser, MAX_CONTEXTS);
-    await state.pool.init();
+    console.log(`📋 Total prefixes: ${ALL_PREFIXES.length} (shuffled)`);
+    console.log(`🌐 Proxies: ${TOTAL_PROXIES} (ports ${START_PORT}–${END_PORT})`);
+    console.log(`🧵 Contexts per proxy: ${CONTEXTS_PER_PROXY}`);
+    console.log(`⚡ Total concurrent contexts per batch: ${TOTAL_PROXIES * CONTEXTS_PER_PROXY}`);
+    console.log(`📦 Total batches: ${totalBatches}`);
+    console.log(`🔀 First 10 prefixes: ${ALL_PREFIXES.slice(0, 10).join(", ")}`);
 
-
-    for (const prefix of PREFIXES) {
-      console.log(`🚀 Processing prefix ${prefix}`);
-
-      stats = { ok: 0, forbidden: 0, other: 0, done: 0 };
-
-      await runPrefix(state, prefix);
+    // Process prefixes in batches of TOTAL_PROXIES (200)
+    // e.g. 1156 prefixes → batch 1: 200, batch 2: 200, ..., batch 6: 156
+    for (const prefix of ALL_PREFIXES) {
+      if (HARD_SHUTDOWN) break;
+    
+      console.log(`\n🚀 PROCESSING PREFIX: ${prefix}\n`);
+    
+      const allCodes = generateCodes(prefix);
+      const perProxy = Math.ceil(allCodes.length / TOTAL_PROXIES);
+    
+      await Promise.all(
+        Array.from({ length: TOTAL_PROXIES }, (_, i) => {
+          const start = i * perProxy;
+          const end = Math.min(start + perProxy, allCodes.length);
+    
+          return runProxyWorker(prefix, i, start, end);
+        })
+      );
+    
+      console.log(`✅ Prefix ${prefix} COMPLETE`);
     }
 
-    await state.pool.close();
-    await state.browser.close();
-
+    console.log("\n🏁 ALL BATCHES COMPLETE");
+    console.log(`📊 Final stats: OK=${globalStats.ok} 403=${globalStats.forbidden} 529r=${globalStats.retries_529} OTHER=${globalStats.other} TOTAL=${globalStats.done}`);
 
   } finally {
-  dbWorker.postMessage("flush");
-  await new Promise(r => setTimeout(r, 1000));
+    await flushDbWorker();
+    console.log("💾 Database flushed");
 
-  await uploadDbToDrive();
-  process.exit(0);
-}
+    try {
+      await sendDbViaGmail();
+    } catch (err) {
+      console.log("Drive upload failed:", err.message);
+    }
+
+    console.log("✅ Safe exit");
+    process.exit(0);
+  }
 })();
-
-
