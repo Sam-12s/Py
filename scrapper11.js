@@ -1,7 +1,7 @@
 // ============================================================
 // DISTRIBUTED SCRAPER v2 — 200 PROXIES × N CONTEXTS
 // ============================================================
-
+let ALL_PREFIXES_DONE = false;
 const CONTEXTS_PER_PROXY = 2;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
@@ -654,7 +654,7 @@ async function runProxyWorker(prefix, proxyIndex, start, end) {
   // Run all contexts in parallel
   async function contextWorker(workerId) {
   
-    while (!HARD_SHUTDOWN) {
+    while (!HARD_SHUTDOWN && !ALL_PREFIXES_DONE) { {
   
       if (codeIndex >= codes.length && retryQueue.length === 0) break;
   
@@ -695,30 +695,30 @@ async function runProxyWorker(prefix, proxyIndex, start, end) {
   
     // ✅ ✅ ✅ PLACE IT RIGHT HERE (OUTSIDE LOOP)
   
-  while (retryQueue.length > 0 && !HARD_SHUTDOWN) {
-  
-    const ctx = await pool.acquire(); // ✅ new context per chunk
-  
-    try {
-      const chunk = retryQueue.splice(0, 50);
-  
-      await Promise.all(
-        chunk.map(async (code) => {
-          try {
-            await fetchCode(ctx, code, proxyIndex, recovery);
-          } catch {
-            retryQueue.push(code);
-          }
-        })
-      );
-  
-    } finally {
-      pool.release(ctx); // ✅ release after chunk
+    while (retryQueue.length > 0 && !HARD_SHUTDOWN && !ALL_PREFIXES_DONE) {
+    
+      const ctx = await pool.acquire(); // ✅ new context per chunk
+    
+      try {
+        const chunk = retryQueue.splice(0, 50);
+    
+        await Promise.all(
+          chunk.map(async (code) => {
+            try {
+              await fetchCode(ctx, code, proxyIndex, recovery);
+            } catch {
+              retryQueue.push(code);
+            }
+          })
+        );
+    
+      } finally {
+        pool.release(ctx); // ✅ release after chunk
+      }
+    
+      // ✅ small cooldown
+      await new Promise(r => setTimeout(r, 50));
     }
-  
-    // ✅ small cooldown
-    await new Promise(r => setTimeout(r, 50));
-  }
   }
   const workers = [];
 
@@ -790,7 +790,13 @@ function runtimeWatchdog() {
       console.log(`✅ Prefix ${prefix} COMPLETE`);
     }
 
-    console.log("\n🏁 ALL BATCHES COMPLETE");
+    ALL_PREFIXES_DONE = true;
+
+    console.log("\n🏁 ALL PREFIXES COMPLETE — STOPPING SCRAPER");
+    
+    // stop everything immediately
+    HARD_SHUTDOWN = true;
+    STOP_FLAG = true;
     console.log(`📊 Final stats: OK=${globalStats.ok} 403=${globalStats.forbidden} 529r=${globalStats.retries_529} OTHER=${globalStats.other} TOTAL=${globalStats.done}`);
 
   } finally {
