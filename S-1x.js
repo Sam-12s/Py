@@ -2,7 +2,7 @@
 // DISTRIBUTED SCRAPER v2 — 200 PROXIES × N CONTEXTS
 // ============================================================
 let ALL_PREFIXES_DONE = false;
-const CONTEXTS_PER_PROXY = 2;
+const CONTEXTS_PER_PROXY = 4;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
 const MAX_RUNTIME_MINUTES = 350;
@@ -272,7 +272,6 @@ if (!isMainThread && workerData === "DB_WORKER") {
   });
 
   setInterval(flush, 200);
-  console.log("🗄️  DB Worker ready");
   parentPort.postMessage("ready");
   console.log("🗄️  DB Worker ready");
   return;
@@ -701,7 +700,7 @@ async function runProxyWorker(prefix, proxyIndex, start, end) {
       const ctx = await pool.acquire();
 
       try {
-        const BATCH = 3;
+        const BATCH = 1;
         const tasks = [];
 
         for (let i = 0; i < BATCH; i++) {
@@ -768,49 +767,16 @@ function runtimeWatchdog() {
     }
   }, 1000);
 }
-async function testProxy(proxyIndex) {
-  const proxy = getProxy(proxyIndex);
 
-  try {
-    const browser = await chromium.launch({
-      headless: true,
-      proxy
-    });
-
-    const ctx = await browser.newContext();
-    const resp = await ctx.request.get("https://indi-1xbet.com");
-
-    await browser.close();
-
-    if (resp.status() === 200) {
-      console.log(`✅ Proxy P${proxyIndex} OK`);
-      return true;
-    }
-
-  } catch (err) {
-    console.log(`❌ Proxy P${proxyIndex} BAD-----------------------`);
-  }
-
-  return false;
-}
 // ============================================================
 // MAIN — SHUFFLED PREFIX LIST, BATCHED BY 200 PROXIES
 // ============================================================
 (async () => {
   try {
-    
-    await Promise.all(
-      Array.from({ length: TOTAL_PROXIES }, async (_, i) => {
-        if (await testProxy(i)) {
-          VALID_PROXIES.push(i);
-        }
-      })
-    );
     runtimeWatchdog();
     await dbReadyPromise;
     console.log("✅ DB ready, starting scraper...");
-    // Generate all 1156 two-char prefixes and shuffle randomly
-    console.log(`🔥 Working proxies: ${VALID_PROXIES.length}/${TOTAL_PROXIES}`);
+
     const ALL_PREFIXES = generateAllPrefixes();
     shuffle(ALL_PREFIXES);
 
@@ -834,10 +800,9 @@ async function testProxy(proxyIndex) {
       const perProxy = Math.ceil(allCodes.length / TOTAL_PROXIES);
     
       await Promise.all(
-        VALID_PROXIES.map(i => {
-          const start = i * perProxy;
-          const end = Math.min(start + perProxy, allCodes.length);
-    
+        Array.from({ length: TOTAL_PROXIES }, (_, i) => { 
+          const start = i * perProxy; 
+          const end = Math.min(start + perProxy, allCodes.length); 
           return runProxyWorker(prefix, i, start, end);
         })
       );
