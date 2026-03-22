@@ -23,4 +23,4 @@ jobs:
           npx playwright install --with-deps
 
       - name: Run script
-        run: node S-1MEL.js
+        run: node S-MEL.js
