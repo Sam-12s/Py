@@ -323,19 +323,20 @@ async function flushDbWorker() {
 }
 
 function logStatus(code, status, proxyIndex) {
-  let color;
-  if (status === 200) { color = "\x1b[32m"; globalStats.ok++; }
-  else if (status === 403) { color = "\x1b[31m"; globalStats.forbidden++; }
-  else if (status === 529) { color = "\x1b[35m"; globalStats.retries_529++; }
-  else { color = "\x1b[33m"; globalStats.other++; }
+  if (status === 200) globalStats.ok++;
+  else if (status === 403) globalStats.forbidden++;
+  else if (status === 529) globalStats.retries_529++;
+  else globalStats.other++;
 
   globalStats.done++;
+
+  // ✅ ONLY LOG EVERY 100,000 REQUESTS
+  if (globalStats.done % 100000 !== 0) return;
+
   console.log(
-    `${color}[P${proxyIndex}][${code}] → ${status}\x1b[0m ` +
-    `| TOTAL=${globalStats.done} OK=${globalStats.ok} 403=${globalStats.forbidden} 529r=${globalStats.retries_529} OTHER=${globalStats.other}`
+    `[PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
   );
 }
-
 // ============================================================
 // PROCESS RESPONSE
 // ============================================================
