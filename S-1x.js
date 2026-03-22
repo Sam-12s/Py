@@ -1,8 +1,7 @@
 // ============================================================
 // DISTRIBUTED SCRAPER v2 — 200 PROXIES × N CONTEXTS
 // ============================================================
-let ALL_PREFIXES_DONE = false;
-const CONTEXTS_PER_PROXY = 4;
+const CONTEXTS_PER_PROXY = 24;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
 const MAX_RUNTIME_MINUTES = 350;
@@ -18,8 +17,32 @@ let globalStats = {
   done: 0,
   retries_529: 0
 };
-
+let GLOBAL_CODE_QUEUE = [];
 const { chromium } = require("playwright");
+// ============================================================
+// GLOBAL REQUEST LIMITER (keeps same pressure)
+// ============================================================
+
+const MAX_REQUESTS_IN_FLIGHT = 1200; 
+let inFlightRequests = 0;
+
+async function acquireRequestSlot() {
+  while (inFlightRequests >= MAX_REQUESTS_IN_FLIGHT && !HARD_SHUTDOWN) {
+    await new Promise(r => setTimeout(r, 2));
+  }
+  inFlightRequests++;
+}
+
+function releaseRequestSlot() {
+  inFlightRequests--;
+}
+const proxyTokens = new Array(TOTAL_PROXIES).fill(4);
+
+setInterval(() => {
+  for (let i = 0; i < TOTAL_PROXIES; i++) {
+    proxyTokens[i] = Math.min(proxyTokens[i] + 1, 4);
+  }
+}, 250);
 
 // ============================================================
 // PROXY GENERATION — 200 proxies, ports 10001–10200
@@ -67,19 +90,42 @@ function shuffle(array) {
     [array[i], array[j]] = [array[j], array[i]];
   }
 }
+const proxyTokens = new Array(TOTAL_PROXIES).fill(4);
 
-function generateCodes(prefix) {
-  const out = [];
-  for (const a of SUFFIX_CHARS) {
-    for (const b of SUFFIX_CHARS) {
-      for (const c of SUFFIX_CHARS) {
-        out.push(`${prefix}${a}${b}${c}`);
+setInterval(() => {
+  for (let i = 0; i < TOTAL_PROXIES; i++) {
+    proxyTokens[i] = Math.min(proxyTokens[i] + 1, 4);
+  }
+}, 250);
+const proxyTokens = new Array(TOTAL_PROXIES).fill(4);
+
+setInterval(() => {
+  for (let i = 0; i < TOTAL_PROXIES; i++) {
+    proxyTokens[i] = Math.min(proxyTokens[i] + 1, 4);
+  }
+}, 250);
+// ============================================================
+// GENERATE ALL CODES ONCE (~1.33M)
+// ============================================================
+
+function generateAllCodes() {
+
+  const prefixes = generateAllPrefixes();
+  const codes = [];
+
+  for (const prefix of prefixes) {
+    for (const a of SUFFIX_CHARS) {
+      for (const b of SUFFIX_CHARS) {
+        for (const c of SUFFIX_CHARS) {
+          codes.push(`${prefix}${a}${b}${c}`);
+        }
       }
     }
   }
-  return out; // 34^3 = 39304
-}
 
+  shuffle(codes);
+  return codes;
+}
 // ============================================================
 // UTILITIES
 // ============================================================
@@ -331,7 +377,7 @@ function logStatus(code, status, proxyIndex) {
   globalStats.done++;
 
   // ✅ ONLY LOG EVERY 100,000 REQUESTS
-  if (globalStats.done % 100000 !== 0) return;
+  if (globalStats.done % 50000 !== 0) return;
 
   console.log(
     `[PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
@@ -459,9 +505,15 @@ function buildHeaders() {
 // FETCH CODE — with 529 immediate retry (per-context)
 // ============================================================
 async function fetchCode(ctx, item, proxyIndex, recovery) {
+  await acquireRequestSlot();
   if (HARD_SHUTDOWN || STOP_FLAG) return;
   const { code, tried } = item;
   const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 71 });
+  while (proxyTokens[proxyIndex] <= 0) {
+  await new Promise(r => setTimeout(r, 5));
+  }
+
+  proxyTokens[proxyIndex]--;
 
     try {
       const resp = await ctx.request.post(
@@ -549,6 +601,7 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
         console.log(`[${code}] Response error: ${err.message}`);
       } finally {
         try { resp.dispose?.(); } catch {}
+        releaseRequestSlot();
       }
 
       return;
@@ -570,18 +623,8 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
 // ============================================================
 // PROXY WORKER — one proxy handles one prefix with N contexts
 // ============================================================
-async function runProxyWorker(prefix, proxyIndex, start, end) {
+async function runProxyWorker(proxyIndex) {
   const proxy = getProxy(proxyIndex);
-  const allCodes = generateCodes(prefix);
-
-  // Split workload per proxy
-  const perProxy = Math.ceil(allCodes.length / TOTAL_PROXIES);
-  const startIdx = proxyIndex * perProxy;
-  const endIdx = Math.min(startIdx + perProxy, allCodes.length);
-
-  const codes = allCodes.slice(startIdx, endIdx);
-  let codeIndex = 0;
-
   let browser;
 
   // =========================
@@ -644,55 +687,51 @@ async function runProxyWorker(prefix, proxyIndex, start, end) {
     }
   };
 
-  console.log(`🚀 [P${proxyIndex}] Prefix "${prefix}" | ${codes.length} codes`);
+  console.log(`🚀 [P${proxyIndex}] Codes queue length: ${GLOBAL_CODE_QUEUE.length}`);
 
   // =========================
   // SMART RETRY PICK
   // =========================
-  function getNextCode() {
+    function getNextCode() {
+  
     let item;
-
-    // 🔁 PRIORITY → GLOBAL RETRY
+  
+    // Retry queue priority
     let loops = GLOBAL_RETRY_QUEUE.length;
-
+  
     while (loops-- > 0) {
+  
       const candidate = GLOBAL_RETRY_QUEUE.shift();
-
-      // 🧠 Drop if exhausted
+  
       if (candidate.tried.size >= TOTAL_PROXIES) {
-        candidate.queued = false; // 🔥 reset before dropping
+        candidate.queued = false;
         continue;
       }
-
-      // ✅ Use if not tried by this proxy
+  
       if (!candidate.tried.has(proxyIndex)) {
         candidate.tried.add(proxyIndex);
-        candidate.queued = false; // 🔥 IMPORTANT
-        item = candidate;
-        break;
+        candidate.queued = false;
+        return candidate;
       }
-
-      // 🔁 put back
+  
       GLOBAL_RETRY_QUEUE.push(candidate);
     }
-
-    if (item) return item;
-
-    // 📦 Normal queue
-    if (codeIndex >= codes.length) return null;
-
+  
+    // Normal queue
+    const code = GLOBAL_CODE_QUEUE.pop();
+    if (!code) return null;
+  
     return {
-      code: codes[codeIndex++],
+      code,
       tried: new Set([proxyIndex]),
       queued: false
     };
   }
-
   // =========================
   // CONTEXT WORKER
   // =========================
   async function contextWorker(workerId) {
-    while (!HARD_SHUTDOWN && !ALL_PREFIXES_DONE) {
+    while (!HARD_SHUTDOWN) {
 
       if (recovery.RECOVERING_403) {
         await new Promise(r => setTimeout(r, 100));
@@ -709,7 +748,7 @@ async function runProxyWorker(prefix, proxyIndex, start, end) {
 
           const item = getNextCode();
           if (!item) break;
-          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+          await new Promise(r => setTimeout(r, 5 + Math.random() * 40));
          
           tasks.push(
             fetchCode(ctx, item, proxyIndex, recovery)
@@ -722,7 +761,7 @@ async function runProxyWorker(prefix, proxyIndex, start, end) {
           );
         }
 
-        if (tasks.length === 0) {
+        if (GLOBAL_CODE_QUEUE.length === 0 && GLOBAL_RETRY_QUEUE.length === 0) {
           pool.release(ctx);
           break;
         }
@@ -791,31 +830,15 @@ function runtimeWatchdog() {
     console.log(`📦 Total batches: ${totalBatches}`);
     console.log(`🔀 First 10 prefixes: ${ALL_PREFIXES.slice(0, 10).join(", ")}`);
 
-    // Process prefixes in batches of TOTAL_PROXIES (200)
-    // e.g. 1156 prefixes → batch 1: 200, batch 2: 200, ..., batch 6: 156
-    for (const prefix of ALL_PREFIXES) {
-      if (HARD_SHUTDOWN) break;
+    console.log("⚙️ Generating all codes...");
+    GLOBAL_CODE_QUEUE = generateAllCodes();
     
-      console.log(`\n🚀 PROCESSING PREFIX: ${prefix}\n`);
+    console.log(`📦 Total codes: ${GLOBAL_CODE_QUEUE.length}`);
     
-      const allCodes = generateCodes(prefix);
-      const perProxy = Math.ceil(allCodes.length / TOTAL_PROXIES);
-    
-      await Promise.all(
-        Array.from({ length: TOTAL_PROXIES }, (_, i) => { 
-          const start = i * perProxy; 
-          const end = Math.min(start + perProxy, allCodes.length); 
-          return runProxyWorker(prefix, i, start, end);
-        })
-      );
-    
-      console.log(`✅ Prefix ${prefix} COMPLETE`);
-    }
+    await Promise.all(
+      Array.from({ length: TOTAL_PROXIES }, (_, i) => runProxyWorker(i))
+    );
 
-    ALL_PREFIXES_DONE = true;
-
-    console.log("\n🏁 ALL PREFIXES COMPLETE — STOPPING SCRAPER");
-    
     // stop everything immediately
     HARD_SHUTDOWN = true;
     STOP_FLAG = true;
