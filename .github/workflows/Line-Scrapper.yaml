@@ -1,0 +1,26 @@
+name: Run LINE-Scraper
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          npm init -y
+          npm install better-sqlite3 nodemailer playwright
+          npx playwright install --with-deps
+
+      - name: Run script
+        run: node S-1LINE.js
