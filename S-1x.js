@@ -36,13 +36,6 @@ async function acquireRequestSlot() {
 function releaseRequestSlot() {
   inFlightRequests--;
 }
-const proxyTokens = new Array(TOTAL_PROXIES).fill(4);
-
-setInterval(() => {
-  for (let i = 0; i < TOTAL_PROXIES; i++) {
-    proxyTokens[i] = Math.min(proxyTokens[i] + 1, 4);
-  }
-}, 250);
 
 // ============================================================
 // PROXY GENERATION — 200 proxies, ports 10001–10200
@@ -97,13 +90,7 @@ setInterval(() => {
     proxyTokens[i] = Math.min(proxyTokens[i] + 1, 4);
   }
 }, 250);
-const proxyTokens = new Array(TOTAL_PROXIES).fill(4);
 
-setInterval(() => {
-  for (let i = 0; i < TOTAL_PROXIES; i++) {
-    proxyTokens[i] = Math.min(proxyTokens[i] + 1, 4);
-  }
-}, 250);
 // ============================================================
 // GENERATE ALL CODES ONCE (~1.33M)
 // ============================================================
@@ -687,7 +674,7 @@ async function runProxyWorker(proxyIndex) {
     }
   };
 
-  console.log(`🚀 [P${proxyIndex}] Codes queue length: ${GLOBAL_CODE_QUEUE.length}`);
+  console.log(`🚀 [P${proxyIndex}] Worker started`);
 
   // =========================
   // SMART RETRY PICK
