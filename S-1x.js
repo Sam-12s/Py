@@ -23,7 +23,7 @@ const { chromium } = require("playwright");
 // GLOBAL REQUEST LIMITER (keeps same pressure)
 // ============================================================
 
-const MAX_REQUESTS_IN_FLIGHT = 1200; 
+const MAX_REQUESTS_IN_FLIGHT = 900; 
 let inFlightRequests = 0;
 
 async function acquireRequestSlot() {
@@ -92,11 +92,18 @@ const proxyStats = Array.from({ length: TOTAL_PROXIES }, () => ({
   success: 0,
   failure: 0,
   requests: 0,
-  delay: 0,        // current delay in ms
-  nextAvailable: 0 // timestamp when proxy can grab next code
+
+  score: 100,
+  health: 1.0,
+
+  delay: 2000, // start at 2s
+  nextAvailable: 0,
+
+  avgLatency: 0,
+  lastLatency: 0
 }));
 
-const PROXY_WINDOW = 35;
+const PROXY_WINDOW = 50;
 const DELAY_STEP = 25000; // 30 seconds
 
 setInterval(() => {
@@ -502,6 +509,25 @@ function buildHeaders() {
   };
 }
 
+function updateProxyScore(stats) {
+
+  const successRate =
+    stats.success / Math.max(stats.requests,1);
+
+  const failureRate =
+    stats.failure / Math.max(stats.requests,1);
+
+  const latencyPenalty =
+    Math.min(stats.avgLatency / 4000, 1);
+
+  stats.health =
+      successRate * 0.55
+    + (1 - failureRate) * 0.20
+    + (1 - latencyPenalty) * 0.20;
+
+  stats.score = Math.max(5, Math.min(100, stats.health * 100));
+}
+
 // ============================================================
 // FETCH CODE — with 529 immediate retry (per-context)
 // ============================================================
@@ -514,14 +540,15 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
   while (proxyTokens[proxyIndex] <= 0) {
   await new Promise(r => setTimeout(r, 5));
   }
-
+  
   proxyTokens[proxyIndex]--;
 
     try {
+      const startTime = Date.now();
       const resp = await ctx.request.post(
         `https://indi-1xbet.com/service-api/LiveBet/Open/GetCoupon`,
         {
-          timeout: 8000,
+          timeout: 15000,
           headers: buildHeaders(),
           data: payload
         }
@@ -529,7 +556,14 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
 
       const status = resp.status();
       stats.requests++;
-
+      const latency = Date.now() - startTime;
+      
+      stats.lastLatency = latency;
+      
+      stats.avgLatency =
+        stats.avgLatency === 0
+          ? latency
+          : stats.avgLatency * 0.85 + latency * 0.15;
       // 529 — immediate retry within this context
       if (status === 529 || status === 503) {
         logStatus(code, 529, proxyIndex);
@@ -606,7 +640,6 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
       } catch (err) {
       } finally {
         try { resp.dispose?.(); } catch {}
-        releaseRequestSlot();
       }
 
       return;
@@ -635,32 +668,23 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
             
             if (stats.requests >= PROXY_WINDOW) {
             
-              // proxy completely failing
-              if (stats.success === 0 && stats.failure >= PROXY_WINDOW) {
+              updateProxyScore(stats);
             
-                stats.delay += DELAY_STEP;
+              const MIN_DELAY = 1800;
+              const MAX_DELAY = 3500;
             
-                console.log(
-                  `🐢 [P${proxyIndex}] 30 fails → increasing delay to ${stats.delay/1000}s`
-                );
+              const scoreFactor = (100 - stats.score) / 100;
             
-              }
+              stats.delay =
+                MIN_DELAY +
+                scoreFactor * (MAX_DELAY - MIN_DELAY);
             
-              // proxy recovered
-              if (stats.success > 0 && stats.delay > 0) {
+              // 🔥 punish weak proxies
+              if (stats.score < 30) stats.delay += 1000;
+              if (stats.score < 15) stats.delay += 2000;
             
-                stats.delay = Math.max(0, stats.delay - DELAY_STEP);
-            
-                console.log(
-                  `⚡ [P${proxyIndex}] success detected → reducing delay to ${stats.delay/1000}s`
-                );
-            
-              }
-            
-              // apply delay to next request
               stats.nextAvailable = Date.now() + stats.delay;
             
-              // reset counters but keep delay
               stats.requests = 0;
               stats.success = 0;
               stats.failure = 0;
@@ -806,9 +830,14 @@ async function runProxyWorker(proxyIndex) {
           const now = Date.now();
           
           if (stats.nextAvailable > now) {
-            await new Promise(r => setTimeout(r, stats.nextAvailable - now));
-          }
           
+            const wait = stats.nextAvailable - now;
+          
+            await new Promise(r =>
+              setTimeout(r, wait + Math.random()*300)
+            );
+          
+          }
           const item = getNextCode();
           if (!item) break;
           await new Promise(r => setTimeout(r, 5 + Math.random() * 40));
