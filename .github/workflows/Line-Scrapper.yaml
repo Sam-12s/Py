@@ -23,4 +23,4 @@ jobs:
           npx playwright install --with-deps
 
       - name: Run script
-        run: node S-1LINE.js
+        run: node S-LINE.js
