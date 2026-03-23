@@ -23,9 +23,18 @@ const { chromium } = require("playwright");
 // GLOBAL REQUEST LIMITER (keeps same pressure)
 // ============================================================
 
-const MAX_REQUESTS_IN_FLIGHT = 900; 
+const MAX_REQUESTS_IN_FLIGHT = 1200; 
 let inFlightRequests = 0;
+function getElapsedTime() {
+  const ms = Date.now() - START_TIME;
 
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+  const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+  const s = String(totalSeconds % 60).padStart(2, "0");
+
+  return `${h}:${m}:${s}`;
+}
 async function acquireRequestSlot() {
   while (inFlightRequests >= MAX_REQUESTS_IN_FLIGHT && !HARD_SHUTDOWN) {
     await new Promise(r => setTimeout(r, 2));
@@ -388,8 +397,8 @@ function logStatus(code, status, proxyIndex) {
   if (globalStats.done % 50000 !== 0) return;
 
   console.log(
-    `[PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
-  );
+  `[${getElapsedTime()}] [PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
+);
 }
 
 // ============================================================
@@ -606,17 +615,28 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
 
       // non-200
       if (status !== 200) {
+
         logStatus(code, status, proxyIndex);
         stats.failure++;
+
+        // 🔥 LOG UNKNOWN STATUS (but don't spam)
+        if (status !== 403 && status !== 529) {
+          if (globalStats.other < 50) { // limit logs
+            console.log(
+              `[${getElapsedTime()}] ❗ OTHER STATUS: ${status} | CODE=${code} | PROXY=P${proxyIndex}`
+            );
+          }
+        }
+
         if (tried.size < TOTAL_PROXIES) {
           if (!item.queued) {
-              item.queued = true;
-              GLOBAL_RETRY_QUEUE.push(item);
-            }
+            item.queued = true;
+            GLOBAL_RETRY_QUEUE.push(item);
+          }
         }
-  
-        return;
-      }
+
+      return;
+}
       // 200
       logStatus(code, 200, proxyIndex);
       
