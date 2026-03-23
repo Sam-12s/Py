@@ -23,7 +23,7 @@ const { chromium } = require("playwright");
 // GLOBAL REQUEST LIMITER (keeps same pressure)
 // ============================================================
 
-const MAX_REQUESTS_IN_FLIGHT = 1200; 
+const MAX_REQUESTS_IN_FLIGHT = 1800; 
 let inFlightRequests = 0;
 function getElapsedTime() {
   const ms = Date.now() - START_TIME;
