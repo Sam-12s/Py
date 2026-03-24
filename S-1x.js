@@ -1,7 +1,7 @@
 // ============================================================
 // DISTRIBUTED SCRAPER v2 — 200 PROXIES × N CONTEXTS
 // ============================================================
-const CONTEXTS_PER_PROXY = 24;
+const CONTEXTS_PER_PROXY = 30;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
 const MAX_RUNTIME_MINUTES = 350;
@@ -23,7 +23,7 @@ const { chromium } = require("playwright");
 // GLOBAL REQUEST LIMITER (keeps same pressure)
 // ============================================================
 
-const MAX_REQUESTS_IN_FLIGHT = 1800; 
+const MAX_REQUESTS_IN_FLIGHT = 3200; 
 let inFlightRequests = 0;
 function getElapsedTime() {
   const ms = Date.now() - START_TIME;
@@ -204,7 +204,7 @@ class ContextPool {
       await new Promise(r => setTimeout(r, 10));
     }
 
-    const ctx = this.queue.pop();
+    const ctx = this.queue.shift();
     return ctx;
   }
 
@@ -787,32 +787,28 @@ async function runProxyWorker(proxyIndex) {
   // =========================
   // SMART RETRY PICK
   // =========================
-    function getNextCode() {
+  function getNextCode() {
   
-    let item;
+    // FIRST: try retry queue
+    while (GLOBAL_RETRY_QUEUE.length > 0) {
   
-    // Retry queue priority
-    let loops = GLOBAL_RETRY_QUEUE.length;
+      const item = GLOBAL_RETRY_QUEUE.pop();
   
-    while (loops-- > 0) {
-  
-      const candidate = GLOBAL_RETRY_QUEUE.shift();
-  
-      if (candidate.tried.size >= TOTAL_PROXIES) {
-        candidate.queued = false;
+      if (item.tried.size >= TOTAL_PROXIES) {
         continue;
       }
   
-      if (!candidate.tried.has(proxyIndex)) {
-        candidate.tried.add(proxyIndex);
-        candidate.queued = false;
-        return candidate;
+      if (!item.tried.has(proxyIndex)) {
+        item.tried.add(proxyIndex);
+        return item;
       }
   
-      GLOBAL_RETRY_QUEUE.push(candidate);
+      // push back if this proxy already tried
+      GLOBAL_RETRY_QUEUE.unshift(item);
+      break;
     }
   
-    // Normal queue
+    // SECOND: normal queue
     const code = GLOBAL_CODE_QUEUE.pop();
     if (!code) return null;
   
@@ -826,42 +822,45 @@ async function runProxyWorker(proxyIndex) {
   // CONTEXT WORKER
   // =========================
   async function contextWorker(workerId) {
+  
+    let ctx = await pool.acquire();
+    let ctxRequests = 0;
+  
+    const BATCH = 4; // better pipeline
+  
     while (!HARD_SHUTDOWN) {
-
+  
       if (recovery.RECOVERING_403) {
         await new Promise(r => setTimeout(r, 100));
         continue;
       }
-
-      const ctx = await pool.acquire();
-
+  
       try {
-        const BATCH = 1;
+  
         const tasks = [];
-
+  
         for (let i = 0; i < BATCH; i++) {
-
+  
           // ==========================================
           // PROXY DELAY CONTROL
           // ==========================================
-          
           const stats = proxyStats[proxyIndex];
-          
           const now = Date.now();
-          
+  
           if (stats.nextAvailable > now) {
-          
             const wait = stats.nextAvailable - now;
-          
-            await new Promise(r =>
-              setTimeout(r, wait + Math.random()*300)
-            );
-          
+            await new Promise(r => setTimeout(r, wait + Math.random()*200));
           }
+  
+          // ==========================================
+          // GET NEXT CODE
+          // ==========================================
           const item = getNextCode();
           if (!item) break;
-          await new Promise(r => setTimeout(r, 5 + Math.random() * 40));
-         
+  
+          // small jitter only
+          await new Promise(r => setTimeout(r, 5 + Math.random() * 40));;
+  
           tasks.push(
             fetchCode(ctx, item, proxyIndex, recovery)
               .catch(() => {
@@ -871,23 +870,53 @@ async function runProxyWorker(proxyIndex) {
                 }
               })
           );
+  
+          ctxRequests++;
         }
-
+  
+        // ==========================================
+        // STOP CONDITION
+        // ==========================================
         if (GLOBAL_CODE_QUEUE.length === 0 && GLOBAL_RETRY_QUEUE.length === 0) {
-          pool.release(ctx);
           break;
         }
-
+  
         await Promise.all(tasks);
-
+  
+        // ==========================================
+        // CONTEXT ROTATION
+        // ==========================================
+        if (ctxRequests >= 200000) {
+  
+          try {
+            await ctx.close();
+          } catch {}
+  
+          ctx = await pool.browser.newContext(randomContextOptions());
+  
+          // warm session
+          try {
+            await ctx.request.get("https://indi-1xbet.com/en");
+          } catch {}
+  
+          ctxRequests = 0;
+        }
+  
       } catch (err) {
+  
         console.log(`[P${proxyIndex}] Worker error: ${err.message}`);
-      } finally {
-          pool.release(ctx);
+  
       }
     }
+  
+    // ==========================================
+    // CLEANUP
+    // ==========================================
+    try {
+      pool.release(ctx);
+    } catch {}
+  
   }
-
   // =========================
   // START WORKERS
   // =========================
