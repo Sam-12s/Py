@@ -77,7 +77,7 @@ const SUFFIX_CHARS = [
 
 function generateAllPrefixes() {
   const prefixes = [];
-  const FIRST_CHAR = "2";
+  const FIRST_CHAR = "X";
 
   for (const b of SUFFIX_CHARS) {
     prefixes.push(`${FIRST_CHAR}${b}`);
