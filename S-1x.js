@@ -826,7 +826,7 @@ async function runProxyWorker(proxyIndex) {
     let ctx = await pool.acquire();
     let ctxRequests = 0;
   
-    const BATCH = 2; // better pipeline
+    const BATCH = 1; // better pipeline
   
     while (!HARD_SHUTDOWN) {
   
