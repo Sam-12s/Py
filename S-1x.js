@@ -23,7 +23,7 @@ const { chromium } = require("playwright");
 // GLOBAL REQUEST LIMITER (keeps same pressure)
 // ============================================================
 
-const MAX_REQUESTS_IN_FLIGHT = 3200; 
+const MAX_REQUESTS_IN_FLIGHT = 3000; 
 let inFlightRequests = 0;
 function getElapsedTime() {
   const ms = Date.now() - START_TIME;
@@ -394,7 +394,7 @@ function logStatus(code, status, proxyIndex) {
   globalStats.done++;
 
   // ✅ ONLY LOG EVERY 100,000 REQUESTS
-  if (globalStats.done % 50000 !== 0) return;
+  if (globalStats.done % 500 !== 0) return;
 
   console.log(
   `[${getElapsedTime()}] [PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
@@ -826,7 +826,7 @@ async function runProxyWorker(proxyIndex) {
     let ctx = await pool.acquire();
     let ctxRequests = 0;
   
-    const BATCH = 1; // better pipeline
+    const BATCH = 2; // better pipeline
   
     while (!HARD_SHUTDOWN) {
   
