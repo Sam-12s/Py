@@ -822,100 +822,93 @@ async function runProxyWorker(proxyIndex) {
   // CONTEXT WORKER
   // =========================
   async function contextWorker(workerId) {
-  
+
     let ctx = await pool.acquire();
     let ctxRequests = 0;
-  
-    const BATCH = 2; // better pipeline
-  
+
     while (!HARD_SHUTDOWN) {
-  
+
+    // ================================
+    // WAIT IF PROXY IS RECOVERING
+    // ================================
       if (recovery.RECOVERING_403) {
         await new Promise(r => setTimeout(r, 100));
         continue;
       }
-  
+
       try {
-  
-        const tasks = [];
-  
-        for (let i = 0; i < BATCH; i++) {
-  
-          // ==========================================
-          // PROXY DELAY CONTROL
-          // ==========================================
-          const stats = proxyStats[proxyIndex];
-          const now = Date.now();
-  
-          if (stats.nextAvailable > now) {
-            const wait = stats.nextAvailable - now;
-            await new Promise(r => setTimeout(r, wait + Math.random()*200));
-          }
-  
-          // ==========================================
-          // GET NEXT CODE
-          // ==========================================
-          const item = getNextCode();
-          if (!item) break;
-  
-          // small jitter only
-          await new Promise(r => setTimeout(r, 5 + Math.random() * 40));;
-  
-          tasks.push(
-            fetchCode(ctx, item, proxyIndex, recovery)
-              .catch(() => {
-                if (!item.queued) {
-                  item.queued = true;
-                  GLOBAL_RETRY_QUEUE.push(item);
-                }
-              })
-          );
-  
-          ctxRequests++;
-        }
-  
-        // ==========================================
-        // STOP CONDITION
-        // ==========================================
+
+      // ================================
+      // STOP CONDITION
+      // ================================
         if (GLOBAL_CODE_QUEUE.length === 0 && GLOBAL_RETRY_QUEUE.length === 0) {
           break;
         }
-  
-        await Promise.all(tasks);
-  
-        // ==========================================
-        // CONTEXT ROTATION
-        // ==========================================
+
+      // ================================
+      // PROXY DELAY CONTROL
+      // ================================
+        const stats = proxyStats[proxyIndex];
+        const now = Date.now();
+
+        if (stats.nextAvailable > now) {
+          const wait = stats.nextAvailable - now;
+          await new Promise(r => setTimeout(r, wait));
+        }
+
+      // ================================
+      // GET NEXT CODE
+      // ================================
+        const item = getNextCode();
+        if (!item) {
+          await new Promise(r => setTimeout(r, 5));
+          continue;
+        }
+
+      // ================================
+      // FIRE REQUEST (NON-BLOCKING)
+      // ================================
+        fetchCode(ctx, item, proxyIndex, recovery)
+          .catch(() => {
+            if (!item.queued) {
+              item.queued = true;
+              GLOBAL_RETRY_QUEUE.push(item);
+            }
+          });
+
+        ctxRequests++;
+
+      // ================================
+      // CONTEXT ROTATION
+      // ================================
         if (ctxRequests >= 200000) {
-  
-          try {
-            await ctx.close();
-          } catch {}
-  
+
+          try { await ctx.close(); } catch {}
+
           ctx = await pool.browser.newContext(randomContextOptions());
-  
-          // warm session
+
+        // warm session
           try {
             await ctx.request.get("https://indi-1xbet.com/en");
           } catch {}
-  
+
           ctxRequests = 0;
         }
-  
+
       } catch (err) {
-  
+
         console.log(`[P${proxyIndex}] Worker error: ${err.message}`);
-  
+
       }
     }
-  
-    // ==========================================
-    // CLEANUP
-    // ==========================================
+
+  // ================================
+  // CLEANUP
+  // ================================
     try {
       pool.release(ctx);
     } catch {}
-  
+
   }
   // =========================
   // START WORKERS
