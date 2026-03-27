@@ -1,11 +1,10 @@
 // ============================================================
 // DISTRIBUTED SCRAPER v2 — 200 PROXIES × N CONTEXTS
 // ============================================================
-let ALL_PREFIXES_DONE = false;
-const CONTEXTS_PER_PROXY = 4;
+const CONTEXTS_PER_PROXY = 30;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
-const MAX_RUNTIME_MINUTES = 350;
+const MAX_RUNTIME_MINUTES = 300;
 const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
 let STOP_FLAG = false;
@@ -18,8 +17,34 @@ let globalStats = {
   done: 0,
   retries_529: 0
 };
-
+let GLOBAL_CODE_QUEUE = [];
 const { chromium } = require("playwright");
+// ============================================================
+// GLOBAL REQUEST LIMITER (keeps same pressure)
+// ============================================================
+
+const MAX_REQUESTS_IN_FLIGHT = 3000; 
+let inFlightRequests = 0;
+function getElapsedTime() {
+  const ms = Date.now() - START_TIME;
+
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+  const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+  const s = String(totalSeconds % 60).padStart(2, "0");
+
+  return `${h}:${m}:${s}`;
+}
+async function acquireRequestSlot() {
+  while (inFlightRequests >= MAX_REQUESTS_IN_FLIGHT && !HARD_SHUTDOWN) {
+    await new Promise(r => setTimeout(r, 2));
+  }
+  inFlightRequests++;
+}
+
+function releaseRequestSlot() {
+  inFlightRequests--;
+}
 
 // ============================================================
 // PROXY GENERATION — 200 proxies, ports 10001–10200
@@ -52,7 +77,7 @@ const SUFFIX_CHARS = [
 
 function generateAllPrefixes() {
   const prefixes = [];
-  const FIRST_CHAR = "2";
+  const FIRST_CHAR = "7";
 
   for (const b of SUFFIX_CHARS) {
     prefixes.push(`${FIRST_CHAR}${b}`);
@@ -67,19 +92,57 @@ function shuffle(array) {
     [array[i], array[j]] = [array[j], array[i]];
   }
 }
+const proxyTokens = new Array(TOTAL_PROXIES).fill(4);
+// ============================================================
+// PROXY INTELLIGENCE TRACKING
+// ============================================================
 
-function generateCodes(prefix) {
-  const out = [];
-  for (const a of SUFFIX_CHARS) {
-    for (const b of SUFFIX_CHARS) {
-      for (const c of SUFFIX_CHARS) {
-        out.push(`${prefix}${a}${b}${c}`);
+const proxyStats = Array.from({ length: TOTAL_PROXIES }, () => ({
+  success: 0,
+  failure: 0,
+  requests: 0,
+
+  score: 100,
+  health: 1.0,
+
+  delay: 2000, // start at 2s
+  nextAvailable: 0,
+
+  avgLatency: 0,
+  lastLatency: 0
+}));
+
+const PROXY_WINDOW = 50;
+const DELAY_STEP = 25000; // 30 seconds
+
+setInterval(() => {
+  for (let i = 0; i < TOTAL_PROXIES; i++) {
+    proxyTokens[i] = Math.min(proxyTokens[i] + 1, 4);
+  }
+}, 250);
+
+// ============================================================
+// GENERATE ALL CODES ONCE (~1.33M)
+// ============================================================
+
+function generateAllCodes() {
+
+  const prefixes = generateAllPrefixes();
+  const codes = [];
+
+  for (const prefix of prefixes) {
+    for (const a of SUFFIX_CHARS) {
+      for (const b of SUFFIX_CHARS) {
+        for (const c of SUFFIX_CHARS) {
+          codes.push(`${prefix}${a}${b}${c}`);
+        }
       }
     }
   }
-  return out; // 34^3 = 39304
-}
 
+  shuffle(codes);
+  return codes;
+}
 // ============================================================
 // UTILITIES
 // ============================================================
@@ -141,7 +204,7 @@ class ContextPool {
       await new Promise(r => setTimeout(r, 10));
     }
 
-    const ctx = this.queue.pop();
+    const ctx = this.queue.shift();
     return ctx;
   }
 
@@ -331,12 +394,13 @@ function logStatus(code, status, proxyIndex) {
   globalStats.done++;
 
   // ✅ ONLY LOG EVERY 100,000 REQUESTS
-  if (globalStats.done % 100000 !== 0) return;
+  if (globalStats.done % 500 !== 0) return;
 
   console.log(
-    `[PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
-  );
+  `[${getElapsedTime()}] [PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
+);
 }
+
 // ============================================================
 // PROCESS RESPONSE
 // ============================================================
@@ -441,7 +505,7 @@ function buildHeaders() {
     "content-type": "application/json",
     "is-srv": "false",
     "Referer": "https://linebet.com/en",
-    "Origin": "https://linebet.com/en,
+    "Origin": "https://linebet.com",
     "sec-ch-ua": SEC_CH_UA[Math.floor(Math.random() * SEC_CH_UA.length)],
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": ['"Windows"', '"macOS"', '"Linux"'][Math.floor(Math.random() * 3)],
@@ -454,29 +518,65 @@ function buildHeaders() {
   };
 }
 
+function updateProxyScore(stats) {
+
+  const successRate =
+    stats.success / Math.max(stats.requests,1);
+
+  const failureRate =
+    stats.failure / Math.max(stats.requests,1);
+
+  const latencyPenalty =
+    Math.min(stats.avgLatency / 4000, 1);
+
+  stats.health =
+      successRate * 0.55
+    + (1 - failureRate) * 0.20
+    + (1 - latencyPenalty) * 0.20;
+
+  stats.score = Math.max(5, Math.min(100, stats.health * 100));
+}
+
 // ============================================================
 // FETCH CODE — with 529 immediate retry (per-context)
 // ============================================================
 async function fetchCode(ctx, item, proxyIndex, recovery) {
+  const stats = proxyStats[proxyIndex];
+  await acquireRequestSlot();
   if (HARD_SHUTDOWN || STOP_FLAG) return;
   const { code, tried } = item;
   const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 71 });
+  while (proxyTokens[proxyIndex] <= 0) {
+  await new Promise(r => setTimeout(r, 5));
+  }
+  
+  proxyTokens[proxyIndex]--;
 
     try {
+      const startTime = Date.now();
       const resp = await ctx.request.post(
         `https://linebet.com/service-api/LiveBet/Open/GetCoupon`,
         {
-          timeout: 30000,
+          timeout: 15000,
           headers: buildHeaders(),
           data: payload
         }
       );
 
       const status = resp.status();
-
+      stats.requests++;
+      const latency = Date.now() - startTime;
+      
+      stats.lastLatency = latency;
+      
+      stats.avgLatency =
+        stats.avgLatency === 0
+          ? latency
+          : stats.avgLatency * 0.85 + latency * 0.15;
       // 529 — immediate retry within this context
       if (status === 529 || status === 503) {
         logStatus(code, 529, proxyIndex);
+        stats.failure++;
   
         console.log(
           `  ↻ RETRY QUEUED [${code}] from P${proxyIndex} (tried=${tried.size})`
@@ -515,20 +615,33 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
 
       // non-200
       if (status !== 200) {
+
         logStatus(code, status, proxyIndex);
-  
+        stats.failure++;
+
+        // 🔥 LOG UNKNOWN STATUS (but don't spam)
+        if (status !== 403 && status !== 529) {
+          if (globalStats.other < 50) { // limit logs
+            console.log(
+              `[${getElapsedTime()}] ❗ OTHER STATUS: ${status} | CODE=${code} | PROXY=P${proxyIndex}`
+            );
+          }
+        }
+
         if (tried.size < TOTAL_PROXIES) {
           if (!item.queued) {
-              item.queued = true;
-              GLOBAL_RETRY_QUEUE.push(item);
-            }
+            item.queued = true;
+            GLOBAL_RETRY_QUEUE.push(item);
+          }
         }
-  
-        return;
-      }
 
+      return;
+}
       // 200
       logStatus(code, 200, proxyIndex);
+      
+      
+      stats.success++;
 
       try {
         const contentType = resp.headers()["content-type"] || "";
@@ -545,7 +658,6 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
           console.log(`[${code}] Unknown format: ${contentType}`);
         }
       } catch (err) {
-        console.log(`[${code}] Response error: ${err.message}`);
       } finally {
         try { resp.dispose?.(); } catch {}
       }
@@ -553,34 +665,61 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
       return;
 
     } catch (err) {
-      console.log(`\x1b[35m[P${proxyIndex}][${code}] → ERROR (${err.message})\x1b[0m`);
-    
+      stats.failure++;
+      stats.requests++;
+      // treat timeout like a retryable error
       if (tried.size < TOTAL_PROXIES) {
         if (!item.queued) {
-            item.queued = true;
+          item.queued = true;
+    
+          setTimeout(() => {
+            item.queued = false;
             GLOBAL_RETRY_QUEUE.push(item);
-          }
+          }, 1500 + Math.random()*2000);
+        }
       }
     
-      return;
+    } finally {
+    
+
+            // ============================================================
+            // PROXY PERFORMANCE EVALUATION (every 30 requests)
+            // ============================================================
+            
+            if (stats.requests >= PROXY_WINDOW) {
+            
+              updateProxyScore(stats);
+            
+              const MIN_DELAY = 1800;
+              const MAX_DELAY = 3500;
+            
+              const scoreFactor = (100 - stats.score) / 100;
+            
+              stats.delay =
+                MIN_DELAY +
+                scoreFactor * (MAX_DELAY - MIN_DELAY);
+            
+              // 🔥 punish weak proxies
+              if (stats.score < 30) stats.delay += 1000;
+              if (stats.score < 15) stats.delay += 2000;
+            
+              stats.nextAvailable = Date.now() + stats.delay;
+            
+              stats.requests = 0;
+              stats.success = 0;
+              stats.failure = 0;
+            }
+            // 🔥 ALWAYS release slot
+            releaseRequestSlot();
+    
     }
 }
 
 // ============================================================
 // PROXY WORKER — one proxy handles one prefix with N contexts
 // ============================================================
-async function runProxyWorker(prefix, proxyIndex, start, end) {
+async function runProxyWorker(proxyIndex) {
   const proxy = getProxy(proxyIndex);
-  const allCodes = generateCodes(prefix);
-
-  // Split workload per proxy
-  const perProxy = Math.ceil(allCodes.length / TOTAL_PROXIES);
-  const startIdx = proxyIndex * perProxy;
-  const endIdx = Math.min(startIdx + perProxy, allCodes.length);
-
-  const codes = allCodes.slice(startIdx, endIdx);
-  let codeIndex = 0;
-
   let browser;
 
   // =========================
@@ -643,99 +782,134 @@ async function runProxyWorker(prefix, proxyIndex, start, end) {
     }
   };
 
-  console.log(`🚀 [P${proxyIndex}] Prefix "${prefix}" | ${codes.length} codes`);
+  console.log(`🚀 [P${proxyIndex}] Worker started`);
 
   // =========================
   // SMART RETRY PICK
   // =========================
   function getNextCode() {
-    let item;
-
-    // 🔁 PRIORITY → GLOBAL RETRY
-    let loops = GLOBAL_RETRY_QUEUE.length;
-
-    while (loops-- > 0) {
-      const candidate = GLOBAL_RETRY_QUEUE.shift();
-
-      // 🧠 Drop if exhausted
-      if (candidate.tried.size >= TOTAL_PROXIES) {
-        candidate.queued = false; // 🔥 reset before dropping
+  
+    // FIRST: try retry queue
+    while (GLOBAL_RETRY_QUEUE.length > 0) {
+  
+      const item = GLOBAL_RETRY_QUEUE.pop();
+  
+      if (item.tried.size >= TOTAL_PROXIES) {
         continue;
       }
-
-      // ✅ Use if not tried by this proxy
-      if (!candidate.tried.has(proxyIndex)) {
-        candidate.tried.add(proxyIndex);
-        candidate.queued = false; // 🔥 IMPORTANT
-        item = candidate;
-        break;
+  
+      if (!item.tried.has(proxyIndex)) {
+        item.tried.add(proxyIndex);
+        return item;
       }
-
-      // 🔁 put back
-      GLOBAL_RETRY_QUEUE.push(candidate);
+  
+      // push back if this proxy already tried
+      GLOBAL_RETRY_QUEUE.unshift(item);
+      break;
     }
-
-    if (item) return item;
-
-    // 📦 Normal queue
-    if (codeIndex >= codes.length) return null;
-
+  
+    // SECOND: normal queue
+    const code = GLOBAL_CODE_QUEUE.pop();
+    if (!code) return null;
+  
     return {
-      code: codes[codeIndex++],
+      code,
       tried: new Set([proxyIndex]),
       queued: false
     };
   }
-
   // =========================
   // CONTEXT WORKER
   // =========================
   async function contextWorker(workerId) {
-    while (!HARD_SHUTDOWN && !ALL_PREFIXES_DONE) {
 
+    let ctx = await pool.acquire();
+    let ctxRequests = 0;
+
+    while (!HARD_SHUTDOWN) {
+
+    // ================================
+    // WAIT IF PROXY IS RECOVERING
+    // ================================
       if (recovery.RECOVERING_403) {
         await new Promise(r => setTimeout(r, 100));
         continue;
       }
 
-      const ctx = await pool.acquire();
-
       try {
-        const BATCH = 1;
-        const tasks = [];
 
-        for (let i = 0; i < BATCH; i++) {
-
-          const item = getNextCode();
-          if (!item) break;
-          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
-         
-          tasks.push(
-            fetchCode(ctx, item, proxyIndex, recovery)
-              .catch(() => {
-                if (!item.queued) {
-                  item.queued = true;
-                  GLOBAL_RETRY_QUEUE.push(item);
-                }
-              })
-          );
-        }
-
-        if (tasks.length === 0) {
-          pool.release(ctx);
+      // ================================
+      // STOP CONDITION
+      // ================================
+        if (GLOBAL_CODE_QUEUE.length === 0 && GLOBAL_RETRY_QUEUE.length === 0) {
           break;
         }
 
-        await Promise.all(tasks);
+      // ================================
+      // PROXY DELAY CONTROL
+      // ================================
+        const stats = proxyStats[proxyIndex];
+        const now = Date.now();
+
+        if (stats.nextAvailable > now) {
+          const wait = stats.nextAvailable - now;
+          await new Promise(r => setTimeout(r, wait));
+        }
+
+      // ================================
+      // GET NEXT CODE
+      // ================================
+        const item = getNextCode();
+        if (!item) {
+          await new Promise(r => setTimeout(r, 5));
+          continue;
+        }
+
+      // ================================
+      // FIRE REQUEST (NON-BLOCKING)
+      // ================================
+        fetchCode(ctx, item, proxyIndex, recovery)
+          .catch(() => {
+            if (!item.queued) {
+              item.queued = true;
+              GLOBAL_RETRY_QUEUE.push(item);
+            }
+          });
+
+        ctxRequests++;
+
+      // ================================
+      // CONTEXT ROTATION
+      // ================================
+        if (ctxRequests >= 200000) {
+
+          try { await ctx.close(); } catch {}
+
+          ctx = await pool.browser.newContext(randomContextOptions());
+
+        // warm session
+          try {
+            await ctx.request.get("https://indi-1xbet.com/en");
+          } catch {}
+
+          ctxRequests = 0;
+        }
 
       } catch (err) {
+
         console.log(`[P${proxyIndex}] Worker error: ${err.message}`);
-      } finally {
-          pool.release(ctx);
+
       }
     }
-  }
 
+  // ================================
+  // CLEANUP
+  // ================================
+    try {
+      pool.release(ctx);
+    } catch {}
+
+  }
   // =========================
   // START WORKERS
   // =========================
@@ -790,31 +964,15 @@ function runtimeWatchdog() {
     console.log(`📦 Total batches: ${totalBatches}`);
     console.log(`🔀 First 10 prefixes: ${ALL_PREFIXES.slice(0, 10).join(", ")}`);
 
-    // Process prefixes in batches of TOTAL_PROXIES (200)
-    // e.g. 1156 prefixes → batch 1: 200, batch 2: 200, ..., batch 6: 156
-    for (const prefix of ALL_PREFIXES) {
-      if (HARD_SHUTDOWN) break;
+    console.log("⚙️ Generating all codes...");
+    GLOBAL_CODE_QUEUE = generateAllCodes();
     
-      console.log(`\n🚀 PROCESSING PREFIX: ${prefix}\n`);
+    console.log(`📦 Total codes: ${GLOBAL_CODE_QUEUE.length}`);
     
-      const allCodes = generateCodes(prefix);
-      const perProxy = Math.ceil(allCodes.length / TOTAL_PROXIES);
-    
-      await Promise.all(
-        Array.from({ length: TOTAL_PROXIES }, (_, i) => { 
-          const start = i * perProxy; 
-          const end = Math.min(start + perProxy, allCodes.length); 
-          return runProxyWorker(prefix, i, start, end);
-        })
-      );
-    
-      console.log(`✅ Prefix ${prefix} COMPLETE`);
-    }
+    await Promise.all(
+      Array.from({ length: TOTAL_PROXIES }, (_, i) => runProxyWorker(i))
+    );
 
-    ALL_PREFIXES_DONE = true;
-
-    console.log("\n🏁 ALL PREFIXES COMPLETE — STOPPING SCRAPER");
-    
     // stop everything immediately
     HARD_SHUTDOWN = true;
     STOP_FLAG = true;
