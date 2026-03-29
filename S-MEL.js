@@ -573,7 +573,7 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
     await acquireRequestSlot();
     await waitProxySlot(proxyIndex);
     const { code, tried } = item;
-    const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 189 });
+    const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 8 });
 
     try {
         const startTime = Date.now();
