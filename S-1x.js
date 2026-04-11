@@ -466,112 +466,127 @@ function logStatus(code, status, proxyIndex) {
 // PROCESS RESPONSE
 // ============================================================
 function processResponse(response, local_code, session_id = "JS") {
-  if (!response) return false;
-  if (response.Success !== true) return "INVALID";
+  if (!response?.Success) return false;
 
-  const pg = response.Value?.Events;
-  if (!pg || pg.length === 0) return false;
+  const events = response.Value?.Events;
+  if (!Array.isArray(events) || events.length === 0) return false;
 
-  const number_of_event = pg.length;
-  const events_status = [];
-  const datetimestamp = [];
-  const match_date = [];
+  const event = events[0]; // safe because most filters assume single-event coupon
+  const number_of_event = events.length;
+
   const odds = [];
   const sports = [];
-  const lst_events = [];
-  const lst_match_time = [];
-  const lst_scores = [];
-  const lst_teams = [];
-  const lst_change = [];
-  const lst_match_oddchanges = [];
+  const teams = [];
+  const groups = [];
+  const scores = [];
+  const matchTimes = [];
+  const changeTimes = [];
+  const eventStatus = [];
 
-  const today_date = new Date().toDateString();
+  let totalOdds = 1;
 
-  try {
-    for (let i = 0; i < number_of_event; i++) {
-      const e = pg[i];
-      events_status.push(e.Finish === false);
-      datetimestamp.push(Number(e.Start) * 1000);
-      odds.push(Number(e.Coef));
-      sports.push(String(e.SportNameEng));
-      lst_events.push(String(e.GroupName));
-      lst_scores.push(String(e.MarketName));
-      lst_teams.push(`${e.Opp1} vs ${e.Opp2}`);
-      lst_change.push(Number(e.Start));
-    }
+  // =========================
+  // PARSE EVENTS
+  // =========================
+  for (let i = 0; i < number_of_event; i++) {
+    const e = events[i];
 
-    for (const ts of datetimestamp) {
-      const d = new Date(ts);
-      match_date.push(d.toDateString());
-      lst_match_time.push(d.toTimeString().split(" ")[0]);
-    }
+    const start = Number(e.Start || 0);
+    const coef = Number(e.Coef || 0);
 
-    for (const ch of lst_change) {
-      const t = new Date(ch).toTimeString().split(" ")[0];
-      lst_match_oddchanges.push(t);
-    }
+    odds.push(coef);
+    sports.push(String(e.SportNameEng || ""));
+    teams.push(`${e.Opp1 || ""} vs ${e.Opp2 || ""}`);
+    groups.push(String(e.GroupName || ""));
+    scores.push(String(e.MarketName || ""));
 
-    let result = 1.0;
-    for (const o of odds) result *= o;
+    eventStatus.push(e.Finish === false);
+    totalOdds *= coef;
 
-    const match_times = lst_match_time.join("|");
-    const outcomes = lst_scores.join("|");
-    const events = lst_events.join("|");
-    const var_odd = odds.join("|");
-    const total_odd = result.toFixed(2);
-    const total_result = Number(result);
-    const change_times = lst_match_oddchanges.join("|");
-    const teams = lst_teams.join("|");
+    const d = new Date(start * 1000);
 
-    // ============================================================
-    // SINGLE FIFA EVENT FILTER
-    // ============================================================
-    
-    if (
-      number_of_event === 1 &&
-      events_status.every(s => s === true) &&
-      match_date.every(d => d === today_date) &&
-      sports.every(s => s.includes("FIFA"))
-    ) {
-    
-      const coef = odds[0];
-    
-      if (coef >= 9 && coef <= 80) {
-    
-        logCode(
-          "FIFA_SINGLE",
-          local_code,
-          session_id,
-          teams,
-          events,
-          outcomes,
-          match_times,
-          var_odd,
-          total_odd,
-          change_times
-        );
-    
-        return "VALID";
-      }
-    }
-    if (
-      events_status.every(s => s === true) &&
-      match_date.every(d => d === today_date) &&
-      sports.every(s => s === "Football")
-    ) {
-      if (number_of_event === 4 && total_result > 100 && total_result < 200) {
-        logCode("QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
-        return "VALID";
-      } 
-    }
-  } catch (err) {
-    console.log(err, `1----${local_code}`);
-  } finally {
-    [events_status, datetimestamp, match_date, odds, sports,
-     lst_events, lst_match_time, lst_scores, lst_teams,
-     lst_change, lst_match_oddchanges].forEach(arr => { arr.length = 0; });
-    global.gc?.();
+    matchTimes.push(d.toISOString().split("T")[1].split(".")[0]); // HH:MM:SS
+    changeTimes.push(d.toISOString().split("T")[1].split(".")[0]);
   }
+
+  // =========================
+  // UTC SAFE DATE CHECK
+  // =========================
+  const now = new Date();
+
+  const isSameUTCDate =
+    new Date(event.Start * 1000).getUTCFullYear() === now.getUTCFullYear() &&
+    new Date(event.Start * 1000).getUTCMonth() === now.getUTCMonth() &&
+    new Date(event.Start * 1000).getUTCDate() === now.getUTCDate();
+
+  const matchTimesStr = matchTimes.join("|");
+  const oddsStr = odds.join("|");
+  const teamsStr = teams.join("|");
+  const groupsStr = groups.join("|");
+  const scoresStr = scores.join("|");
+  const changeStr = changeTimes.join("|");
+
+  const allFinishedFalse = eventStatus.every(Boolean);
+  const allFIFA = sports.every(s => s.includes("FIFA"));
+
+  // =========================
+  // FILTER 1 — FIFA SINGLE
+  // =========================
+  if (
+    number_of_event === 1 &&
+    allFinishedFalse &&
+    allFIFA &&
+    isSameUTCDate
+  ) {
+    const coef = odds[0];
+
+    if (coef >= 9 && coef <= 80) {
+      logCode(
+        "FIFA_SINGLE",
+        local_code,
+        session_id,
+        teamsStr,
+        groupsStr,
+        scoresStr,
+        matchTimesStr,
+        oddsStr,
+        totalOdds.toFixed(2),
+        changeStr
+      );
+
+      return "VALID";
+    }
+  }
+
+  // =========================
+  // FILTER 2 — QUADRUPLE FOOTBALL
+  // =========================
+  const allFootball = sports.every(s => s === "Football");
+
+  if (
+    number_of_event === 4 &&
+    allFinishedFalse &&
+    allFootball &&
+    isSameUTCDate
+  ) {
+    if (totalOdds > 100 && totalOdds < 200) {
+      logCode(
+        "QUADRIPLE",
+        local_code,
+        session_id,
+        teamsStr,
+        groupsStr,
+        scoresStr,
+        matchTimesStr,
+        oddsStr,
+        totalOdds.toFixed(2),
+        changeStr
+      );
+
+      return "VALID";
+    }
+  }
+
   return false;
 }
 
