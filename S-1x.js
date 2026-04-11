@@ -18,6 +18,11 @@ let globalStats = {
   retries_529: 0
 };
 let GLOBAL_CODE_QUEUE = [];
+let LAST_ACTIVITY = Date.now()
+
+function markActivity(){
+  LAST_ACTIVITY = Date.now()
+}
 const { chromium } = require("playwright");
 // ============================================================
 // GLOBAL REQUEST LIMITER (keeps same pressure)
@@ -73,7 +78,7 @@ function getProxy(index) {
 // ? = unknown character
 // ============================================================
 
-const CODE_PATTERN = "F?Y?9"; 
+const CODE_PATTERN = "2?E?9"; 
 // ============================================================
 // PREFIX GENERATION & SHUFFLE
 // ============================================================
@@ -632,6 +637,7 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
   const stats = proxyStats[proxyIndex];
   if (HARD_SHUTDOWN || STOP_FLAG) return;
   await acquireRequestSlot();
+  markActivity();
   await waitProxySlot(proxyIndex);
   const { code, tried } = item;
   const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 71 });
@@ -673,6 +679,7 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
           setTimeout(() => {
             item.queued = false; // 🔥 reset before requeue
             GLOBAL_RETRY_QUEUE.push(item);
+            markActivity();
           }, 1000 + Math.random() * 2000);
         }
 
@@ -759,6 +766,7 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
           setTimeout(() => {
             item.queued = false;
             GLOBAL_RETRY_QUEUE.push(item);
+            markActivity();
           }, 1500 + Math.random()*2000);
         }
       }
@@ -962,7 +970,11 @@ async function runProxyWorker(proxyIndex) {
         // ==========================================
         // STOP CONDITION
         // ==========================================
-        if (GLOBAL_CODE_QUEUE.length === 0 && GLOBAL_RETRY_QUEUE.length === 0) {
+        if (
+          GLOBAL_CODE_QUEUE.length === 0 &&
+          GLOBAL_RETRY_QUEUE.length === 0 &&
+          Date.now() - LAST_ACTIVITY > 3000
+        ) {
           break;
         }
   
