@@ -78,7 +78,7 @@ function getProxy(index) {
 // ? = unknown character
 // ============================================================
 
-const CODE_PATTERN = "Y?D?9"; 
+const CODE_PATTERN = "Y?7?9"; 
 // ============================================================
 // PREFIX GENERATION & SHUFFLE
 // ============================================================
@@ -358,7 +358,7 @@ const { Worker, isMainThread, parentPort, workerData } = require("worker_threads
 if (!isMainThread && workerData === "DB_WORKER") {
   const db = new Database("OUTPUT.db");
   db.exec(`
-    PRAGMA journal_mode = WAL;
+    PRAGMA journal_mode = DELETE;;
     PRAGMA synchronous = NORMAL;
     PRAGMA temp_store = MEMORY;
     PRAGMA cache_size = -50000;
@@ -446,7 +446,7 @@ function logCode(label, code, workerId, teams, events, score, times, odds, total
 async function flushDbWorker() {
   if (!dbWorker) return;
   dbWorker.postMessage("flush");
-  await new Promise(r => setTimeout(r, 1000));
+  await new Promise(r => setTimeout(r, 5000));
 }
 
 function logStatus(code, status, proxyIndex) {
@@ -537,17 +537,6 @@ function processResponse(response, local_code, session_id = "JS") {
       const coef = odds[0];
     
       if (coef >= 9 && coef <= 80) {
-      console.log("📦 FIFA_SINGLE DATA");
-      console.log("CODE:", local_code);
-      console.log("SESSION:", session_id);
-      console.log("TEAMS:", teams);
-      console.log("EVENTS:", events);
-      console.log("OUTCOMES:", outcomes);
-      console.log("MATCH TIMES:", match_times);
-      console.log("ODDS:", var_odd);
-      console.log("TOTAL ODDS:", total_odd);
-      console.log("CHANGE TIMES:", change_times);
-      console.log("--------------------------------------------------");
         logCode(
           "FIFA_SINGLE",
           local_code,
@@ -560,7 +549,6 @@ function processResponse(response, local_code, session_id = "JS") {
           total_odd,
           change_times
         );
-      console.log("❌ FIFA FAILED COEF CHECK:", coef);
         return "VALID";
       }
     }
