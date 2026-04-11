@@ -64,7 +64,16 @@ function getProxy(index) {
     password: PROXY_PASSWORD
   };
 }
+// ============================================================
+// CODE PATTERN FILTER (leave "?" if unknown)
+// ============================================================
 
+// ============================================================
+// CODE SEARCH PATTERN
+// ? = unknown character
+// ============================================================
+
+const CODE_PATTERN = "F?Y?9"; 
 // ============================================================
 // PREFIX GENERATION & SHUFFLE
 // ============================================================
@@ -122,20 +131,42 @@ const DELAY_STEP = 25000; // 30 seconds
 
 function generateAllCodes() {
 
-  const prefixes = generateAllPrefixes();
   const codes = [];
 
-  for (const prefix of prefixes) {
-    for (const a of SUFFIX_CHARS) {
-      for (const b of SUFFIX_CHARS) {
-        for (const c of SUFFIX_CHARS) {
-          codes.push(`${prefix}${a}${b}${c}`);
+  if (CODE_PATTERN.length !== 5) {
+    throw new Error("CODE_PATTERN must be exactly 5 characters");
+  }
+
+  const pattern = CODE_PATTERN.toUpperCase();
+
+  const charSets = [];
+
+  for (let i = 0; i < 5; i++) {
+
+    if (pattern[i] === "?") {
+      charSets.push(SUFFIX_CHARS);
+    } else {
+      charSets.push([pattern[i]]);
+    }
+
+  }
+
+  for (const a of charSets[0]) {
+    for (const b of charSets[1]) {
+      for (const c of charSets[2]) {
+        for (const d of charSets[3]) {
+          for (const e of charSets[4]) {
+
+            codes.push(`${a}${b}${c}${d}${e}`);
+
+          }
         }
       }
     }
   }
 
   shuffle(codes);
+
   return codes;
 }
 
@@ -487,6 +518,37 @@ function processResponse(response, local_code, session_id = "JS") {
     const change_times = lst_match_oddchanges.join("|");
     const teams = lst_teams.join("|");
 
+    // ============================================================
+    // SINGLE FIFA EVENT FILTER
+    // ============================================================
+    
+    if (
+      number_of_event === 1 &&
+      events_status.every(s => s === true) &&
+      match_date.every(d => d === today_date) &&
+      sports.every(s => s.includes("FIFA"))
+    ) {
+    
+      const coef = odds[0];
+    
+      if (coef >= 9 && coef <= 80) {
+    
+        logCode(
+          "FIFA_SINGLE",
+          local_code,
+          session_id,
+          teams,
+          events,
+          outcomes,
+          match_times,
+          var_odd,
+          total_odd,
+          change_times
+        );
+    
+        return "VALID";
+      }
+    }
     if (
       events_status.every(s => s === true) &&
       match_date.every(d => d === today_date) &&
@@ -994,6 +1056,8 @@ function runtimeWatchdog() {
 
     console.log("⚙️ Generating all codes...");
     GLOBAL_CODE_QUEUE = generateAllCodes();
+    console.log(`🔎 Pattern used: ${CODE_PATTERN}`);
+    console.log(`📦 Codes generated: ${GLOBAL_CODE_QUEUE.length}`);
 
     console.log(`📦 Total codes: ${GLOBAL_CODE_QUEUE.length}`);
 
