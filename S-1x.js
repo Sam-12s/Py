@@ -537,7 +537,17 @@ function processResponse(response, local_code, session_id = "JS") {
       const coef = odds[0];
     
       if (coef >= 9 && coef <= 80) {
-      
+      console.log("📦 FIFA_SINGLE DATA");
+      console.log("CODE:", local_code);
+      console.log("SESSION:", session_id);
+      console.log("TEAMS:", teams);
+      console.log("EVENTS:", events);
+      console.log("OUTCOMES:", outcomes);
+      console.log("MATCH TIMES:", match_times);
+      console.log("ODDS:", var_odd);
+      console.log("TOTAL ODDS:", total_odd);
+      console.log("CHANGE TIMES:", change_times);
+      console.log("--------------------------------------------------");
         logCode(
           "FIFA_SINGLE",
           local_code,
