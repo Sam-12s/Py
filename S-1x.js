@@ -78,7 +78,7 @@ function getProxy(index) {
 // ? = unknown character
 // ============================================================
 
-const CODE_PATTERN = "R?U?9"; 
+const CODE_PATTERN = "G3FJ9"; 
 // ============================================================
 // PREFIX GENERATION & SHUFFLE
 // ============================================================
@@ -531,10 +531,18 @@ function processResponse(response, local_code, session_id = "JS") {
   // =========================
   // FILTER 1 — FIFA SINGLE
   // =========================
+  console.log("DEBUG FILTER CHECK", {
+  number_of_event,
+  allFinishedFalse,
+  allFootball,
+  sports,
+  finishValues: eventStatus
+  });
   if (
     number_of_event === 1 &&
     allFinishedFalse &&
-    allFIFA
+    allFootball &&
+    isSameUTCDate
   ) {
     const coef = odds[0];
     console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee2");
@@ -1080,8 +1088,6 @@ function runtimeWatchdog() {
     console.log(`🧵 Contexts per proxy: ${CONTEXTS_PER_PROXY}`);
     console.log(`⚡ Total concurrent contexts per batch: ${TOTAL_PROXIES * CONTEXTS_PER_PROXY}`);
     console.log(`📦 Total batches: ${totalBatches}`);
-    console.log(`🔀 First 10 prefixes: ${ALL_PREFIXES.slice(0, 10).join(", ")}`);
-
     console.log("⚙️ Generating all codes...");
     GLOBAL_CODE_QUEUE = generateAllCodes();
     console.log(`🔎 Pattern used: ${CODE_PATTERN}`);
