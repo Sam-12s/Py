@@ -537,7 +537,7 @@ function processResponse(response, local_code, session_id = "JS") {
       const coef = odds[0];
     
       if (coef >= 9 && coef <= 80) {
-      console.log("❌ FIFA FAILED COEF CHECK:", coef);
+      
         logCode(
           "FIFA_SINGLE",
           local_code,
@@ -550,7 +550,7 @@ function processResponse(response, local_code, session_id = "JS") {
           total_odd,
           change_times
         );
-    
+      console.log("❌ FIFA FAILED COEF CHECK:", coef);
         return "VALID";
       }
     }
