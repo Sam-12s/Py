@@ -527,7 +527,13 @@ function processResponse(response, local_code, session_id = "JS") {
   // =========================
   // FILTER 1 — FIFA SINGLE
   // =========================
-
+  console.log("DEBUG FILTER CHECK", {
+  number_of_event,
+  allFinishedFalse,
+  allFootball,
+  sports,
+  finishValues: eventStatus
+  });
   if (
     number_of_event === 1 &&
     allFinishedFalse &&
@@ -536,6 +542,7 @@ function processResponse(response, local_code, session_id = "JS") {
   ) {
     const coef = odds[0];
     if (coef >= 9 && coef <= 80) {
+      console.log("FIFA CHECK:", coef);
       logCode(
         "FIFA_SINGLE",
         local_code,
@@ -563,7 +570,6 @@ function processResponse(response, local_code, session_id = "JS") {
     allFootball &&
     isSameUTCDate
   ) {
-    console.log("FIFA CHECK:", coef);
     if (totalOdds > 100 && totalOdds < 200) {
       logCode(
         "QUADRIPLE",
