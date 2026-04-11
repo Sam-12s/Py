@@ -528,7 +528,7 @@ function processResponse(response, local_code, session_id = "JS") {
 
   const allFinishedFalse = eventStatus.every(Boolean);
   const allFIFA = sports.every(s => s.includes("FIFA"));
-
+  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee1");
   // =========================
   // FILTER 1 — FIFA SINGLE
   // =========================
@@ -539,8 +539,9 @@ function processResponse(response, local_code, session_id = "JS") {
     isSameUTCDate
   ) {
     const coef = odds[0];
-
+    console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee2");
     if (coef >= 9 && coef <= 80) {
+      console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee3");
       logCode(
         "FIFA_SINGLE",
         local_code,
@@ -557,7 +558,7 @@ function processResponse(response, local_code, session_id = "JS") {
       return "VALID";
     }
   }
-
+  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee4");
   // =========================
   // FILTER 2 — QUADRUPLE FOOTBALL
   // =========================
