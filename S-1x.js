@@ -502,9 +502,7 @@ function processResponse(response, local_code, session_id = "JS") {
 
     eventStatus.push(e.Finish === false);
     totalOdds *= coef;
-
     const d = new Date(start * 1000);
-
     matchTimes.push(d.toISOString().split("T")[1].split(".")[0]); // HH:MM:SS
     changeTimes.push(d.toISOString().split("T")[1].split(".")[0]);
   }
@@ -518,17 +516,14 @@ function processResponse(response, local_code, session_id = "JS") {
     new Date(event.Start * 1000).getUTCFullYear() === now.getUTCFullYear() &&
     new Date(event.Start * 1000).getUTCMonth() === now.getUTCMonth() &&
     new Date(event.Start * 1000).getUTCDate() === now.getUTCDate();
-  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee09");
   const matchTimesStr = matchTimes.join("|");
   const oddsStr = odds.join("|");
   const teamsStr = teams.join("|");
   const groupsStr = groups.join("|");
   const scoresStr = scores.join("|");
   const changeStr = changeTimes.join("|");
-  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee10");
   const allFinishedFalse = eventStatus.every(Boolean);
   const allFIFA = sports.every(s => s.includes("FIFA"));
-  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee11");
   // =========================
   // FILTER 1 — FIFA SINGLE
   // =========================
@@ -540,9 +535,7 @@ function processResponse(response, local_code, session_id = "JS") {
     isSameUTCDate
   ) {
     const coef = odds[0];
-    console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee2");
     if (coef >= 9 && coef <= 80) {
-      console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee3");
       logCode(
         "FIFA_SINGLE",
         local_code,
@@ -570,6 +563,7 @@ function processResponse(response, local_code, session_id = "JS") {
     allFootball &&
     isSameUTCDate
   ) {
+    console.log("FIFA CHECK:", coef);
     if (totalOdds > 100 && totalOdds < 200) {
       logCode(
         "QUADRIPLE",
