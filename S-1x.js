@@ -528,7 +528,6 @@ function processResponse(response, local_code, session_id = "JS") {
 
   const allFinishedFalse = eventStatus.every(Boolean);
   const allFIFA = sports.every(s => s.includes("FIFA"));
-  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee1");
   // =========================
   // FILTER 1 — FIFA SINGLE
   // =========================
@@ -536,7 +535,6 @@ function processResponse(response, local_code, session_id = "JS") {
     number_of_event === 1 &&
     allFinishedFalse &&
     allFIFA &&
-    isSameUTCDate
   ) {
     const coef = odds[0];
     console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee2");
@@ -558,7 +556,6 @@ function processResponse(response, local_code, session_id = "JS") {
       return "VALID";
     }
   }
-  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee4");
   // =========================
   // FILTER 2 — QUADRUPLE FOOTBALL
   // =========================
