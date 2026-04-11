@@ -534,7 +534,7 @@ function processResponse(response, local_code, session_id = "JS") {
   if (
     number_of_event === 1 &&
     allFinishedFalse &&
-    allFIFA &&
+    allFIFA
   ) {
     const coef = odds[0];
     console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee2");
