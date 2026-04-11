@@ -518,26 +518,21 @@ function processResponse(response, local_code, session_id = "JS") {
     new Date(event.Start * 1000).getUTCFullYear() === now.getUTCFullYear() &&
     new Date(event.Start * 1000).getUTCMonth() === now.getUTCMonth() &&
     new Date(event.Start * 1000).getUTCDate() === now.getUTCDate();
-
+  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee09");
   const matchTimesStr = matchTimes.join("|");
   const oddsStr = odds.join("|");
   const teamsStr = teams.join("|");
   const groupsStr = groups.join("|");
   const scoresStr = scores.join("|");
   const changeStr = changeTimes.join("|");
-
+  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee10");
   const allFinishedFalse = eventStatus.every(Boolean);
   const allFIFA = sports.every(s => s.includes("FIFA"));
+  console.log("📧 hereeeeeeeeeeeeeeeeeeeeeeeeeeeeee11");
   // =========================
   // FILTER 1 — FIFA SINGLE
   // =========================
-  console.log("DEBUG FILTER CHECK", {
-  number_of_event,
-  allFinishedFalse,
-  allFootball,
-  sports,
-  finishValues: eventStatus
-  });
+
   if (
     number_of_event === 1 &&
     allFinishedFalse &&
