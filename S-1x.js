@@ -743,7 +743,7 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
         }
       } catch (err) {
       } finally {
-        try { resp.dispose?.(); } catch {}
+        
       }
 
       return;
@@ -843,11 +843,14 @@ async function runProxyWorker(proxyIndex) {
     RECOVERING_403: false,
 
     async recoverFrom403() {
+    
       console.log(`🚨 [P${proxyIndex}] Proxy blocked → rebuilding`);
-
+    
+      await new Promise(r => setTimeout(r, 500));
+    
       try { await pool.close(); } catch {}
       try { await browser.close(); } catch {}
-
+    
       browser = await chromium.launch({
         headless: true,
         proxy: {
@@ -856,12 +859,12 @@ async function runProxyWorker(proxyIndex) {
           password: proxy.password
         }
       });
-
+    
       await pool.rebuild(browser);
-
+    
       this.BLOCKED_COUNT = 0;
       this.RECOVERING_403 = false;
-
+    
       console.log(`✅ [P${proxyIndex}] Recovery complete`);
     }
   };
