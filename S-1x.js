@@ -10,6 +10,8 @@ const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
 let STOP_FLAG = false;
 let HARD_SHUTDOWN = false;
 const GLOBAL_RETRY_QUEUE = [];
+const PART_INDEX = 0; // 0, 1, 2, 3 (choose which chunk to run)
+const TOTAL_PARTS = 4;
 let globalStats = {
   ok: 0,
   forbidden: 0,
@@ -72,13 +74,22 @@ function getProxy(index) {
 // ============================================================
 // CODE PATTERN FILTER (leave "?" if unknown)
 // ============================================================
+function splitChars(chars, parts) {
+  const result = [];
+  const size = Math.ceil(chars.length / parts);
 
+  for (let i = 0; i < parts; i++) {
+    result.push(chars.slice(i * size, (i + 1) * size));
+  }
+
+  return result;
+}
 // ============================================================
 // CODE SEARCH PATTERN
 // ? = unknown character
 // ============================================================
 
-const CODE_PATTERN = "ASL??"; 
+const CODE_PATTERN = "?????"; 
 // ============================================================
 // PREFIX GENERATION & SHUFFLE
 // ============================================================
@@ -146,14 +157,23 @@ function generateAllCodes() {
 
   const charSets = [];
 
+  const split = splitChars(SUFFIX_CHARS, TOTAL_PARTS);
+  const firstCharSet = split[PART_INDEX];
+  console.log(`🧩 Running PART ${PART_INDEX + 1}/${TOTAL_PARTS}`);
+  console.log(`🔤 First char set: ${firstCharSet.join("")}`);
+  
   for (let i = 0; i < 5; i++) {
-
     if (pattern[i] === "?") {
-      charSets.push(SUFFIX_CHARS);
+      if (i === 0) {
+        // 🔥 FIRST CHAR → ONLY ONE PART
+        charSets.push(firstCharSet);
+      } else {
+        // remaining 4 chars → full set
+        charSets.push(SUFFIX_CHARS);
+      }
     } else {
       charSets.push([pattern[i]]);
     }
-
   }
 
   for (const a of charSets[0]) {
@@ -523,35 +543,6 @@ function processResponse(response, local_code, session_id = "JS") {
     const change_times = lst_match_oddchanges.join("|");
     const teams = lst_teams.join("|");
 
-    // ============================================================
-    // SINGLE FIFA EVENT FILTER
-    // ============================================================
-    
-    if (
-      number_of_event === 1 &&
-      events_status.every(s => s === true) &&
-      match_date.every(d => d === today_date) &&
-      sports.every(s => s.includes("FIFA"))
-    ) {
-      console.log("🔥🔥 FIFA HIT CONFIRMED → LOGGING DB", local_code);
-      const coef = odds[0];
-    
-      if (coef >= 9 && coef <= 80) {
-        logCode(
-          "FIFA_SINGLE",
-          local_code,
-          session_id,
-          teams,
-          events,
-          outcomes,
-          match_times,
-          var_odd,
-          total_odd,
-          change_times
-        );
-        return "VALID";
-      }
-    }
     if (
       events_status.every(s => s === true) &&
       match_date.every(d => d === today_date) &&
@@ -559,6 +550,10 @@ function processResponse(response, local_code, session_id = "JS") {
     ) {
       if (number_of_event === 4 && total_result > 100 && total_result < 200) {
         logCode("QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
+        return "VALID";
+      }
+      if (number_of_event === 3 && total_result > 100 && total_result < 200) {
+        logCode("TRIPPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
         return "VALID";
       } 
     }
@@ -1066,10 +1061,7 @@ function runtimeWatchdog() {
     console.log(`📦 Total batches: ${totalBatches}`);
     console.log("⚙️ Generating all codes...");
     GLOBAL_CODE_QUEUE = generateAllCodes();
-    console.log(`🔎 Pattern used: ${CODE_PATTERN}`);
-    console.log(`📦 Codes generated: ${GLOBAL_CODE_QUEUE.length}`);
 
-    console.log(`📦 Total codes: ${GLOBAL_CODE_QUEUE.length}`);
 
     await Promise.all(
       Array.from({ length: TOTAL_PROXIES }, (_, i) => runProxyWorker(i))
