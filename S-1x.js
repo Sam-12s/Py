@@ -244,7 +244,7 @@ class ContextPool {
 
       // ✅ WARM-UP SESSION (ADD THIS)
       try {
-        await ctx.request.get("https://indi-1xbet.com/en");
+        await ctx.request.get("https://betongame-8963.top/en");
       } catch (e) {}
 
       this.pool.push(ctx);
@@ -456,7 +456,7 @@ function logStatus(code, status, proxyIndex) {
   else globalStats.other++;
 
   globalStats.done++;
-  if (globalStats.done % 20000 !== 0) return;
+  if (globalStats.done % 200 !== 0) return;
   console.log(
   `[${getElapsedTime()}] [PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
 );
@@ -591,11 +591,11 @@ async function blockResources(page) {
 function buildHeaders() {
   return {
     "accept": "application/json, text/plain, */*",
-    "content-type": "application/json",
+    "content-type": "application/json;charset=UTF-8",
     "connection": "close",
     "is-srv": "false",
-    "Referer": "https://indi-1xbet.com/en",
-    "Origin": "https://indi-1xbet.com",
+    "Referer": "https://betongame-8963.top/en",
+    "Origin": "https://betongame-8963.top",
     "sec-ch-ua": SEC_CH_UA[Math.floor(Math.random() * SEC_CH_UA.length)],
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": ['"Windows"', '"macOS"', '"Linux"'][Math.floor(Math.random() * 3)],
@@ -637,12 +637,12 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
   markActivity();
   await waitProxySlot(proxyIndex);
   const { code, tried } = item;
-  const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 71 });
+  const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 371 });
 
     try {
       const startTime = Date.now();
       const resp = await ctx.request.post(
-        `https://indi-1xbet.com/service-api/LiveBet/Open/GetCoupon`,
+        `https://betongame-8963.top/LiveUtil/GetCoupon`,
         {
           timeout: 15000,
           headers: buildHeaders(),
