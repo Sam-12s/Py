@@ -456,7 +456,7 @@ function logStatus(code, status, proxyIndex) {
   else globalStats.other++;
 
   globalStats.done++;
-  if (globalStats.done % 200 !== 0) return;
+  if (globalStats.done % 20000 !== 0) return;
   console.log(
   `[${getElapsedTime()}] [PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
 );
