@@ -9,6 +9,10 @@ const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
 let STOP_FLAG = false;
 let HARD_SHUTDOWN = false;
+const RESET_EVERY = 100000;
+let RESETTING = false;
+let RESET_PROMISE = null;
+let RESET_RESOLVE = null;
 const GLOBAL_RETRY_QUEUE = [];
 const PART_INDEX = 0; // 0, 1, 2, 3 (choose which chunk to run)
 const TOTAL_PARTS = 4;
@@ -476,6 +480,13 @@ function logStatus(code, status, proxyIndex) {
   else globalStats.other++;
 
   globalStats.done++;
+    // 🔥 TRIGGER RESET
+  if (globalStats.done % RESET_EVERY === 0 && !RESETTING) {
+    console.log(`🧹 RESET TRIGGERED at ${globalStats.done}`);
+
+    RESETTING = true;
+    RESET_PROMISE = new Promise(res => RESET_RESOLVE = res);
+  }
   if (globalStats.done % 20000 !== 0) return;
   console.log(
   `[${getElapsedTime()}] [PROGRESS] TOTAL=${globalStats.done} | OK=${globalStats.ok} | 403=${globalStats.forbidden} | 529r=${globalStats.retries_529} | OTHER=${globalStats.other}`
@@ -629,6 +640,10 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
   const stats = proxyStats[proxyIndex];
   if (HARD_SHUTDOWN || STOP_FLAG) return;
   await acquireRequestSlot();
+  if (RESETTING) {
+  releaseRequestSlot();
+  return;
+  } 
   markActivity();
   await waitProxySlot(proxyIndex);
   const { code, tried } = item;
@@ -833,7 +848,49 @@ async function runProxyWorker(proxyIndex) {
   // =========================
   const pool = new ContextPool(browser, CONTEXTS_PER_PROXY);
   await pool.init();
+  handleGlobalReset(); // 🔥 add this after pool.init()
+  async function handleGlobalReset() {
+  while (!HARD_SHUTDOWN) {
 
+    if (!RESETTING) {
+      await new Promise(r => setTimeout(r, 50));
+      continue;
+    }
+
+    console.log(`🛑 [P${proxyIndex}] Stopping for reset...`);
+
+    // wait for all in-flight requests to finish
+    while (inFlightRequests > 0) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+
+    // close everything
+    try { await pool.close(); } catch {}
+    try { await browser.close(); } catch {}
+
+    console.log(`♻️ [P${proxyIndex}] Rebuilding browser + contexts`);
+
+    browser = await chromium.launch({
+      headless: true,
+      proxy: {
+        server: proxy.server,
+        username: proxy.username,
+        password: proxy.password
+      }
+    });
+
+    await pool.rebuild(browser);
+
+    console.log(`✅ [P${proxyIndex}] Reset complete`);
+
+    // only ONE worker should release reset
+    if (proxyIndex === 0 && RESET_RESOLVE) {
+      RESET_RESOLVE();
+      RESET_RESOLVE = null;
+      RESETTING = false;
+    }
+  }
+}
   // =========================
   // RECOVERY SYSTEM
   // =========================
@@ -909,14 +966,17 @@ async function runProxyWorker(proxyIndex) {
   // CONTEXT WORKER
   // =========================
   async function contextWorker(workerId) {
-  
+
     let ctx = await pool.acquire();
     let ctxRequests = 0;
   
     const BATCH = 1; // better pipeline
   
     while (!HARD_SHUTDOWN) {
-  
+      if (RESETTING) {
+        await RESET_PROMISE;
+        continue;
+      }
       if (recovery.RECOVERING_403) {
         await new Promise(r => setTimeout(r, 100));
         continue;
@@ -975,7 +1035,7 @@ async function runProxyWorker(proxyIndex) {
         // ==========================================
         // CONTEXT ROTATION
         // ==========================================
-        if (ctxRequests >= 200000) {
+        if (ctxRequests >= 5000) {
   
           try {
             await ctx.close();
