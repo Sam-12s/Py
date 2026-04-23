@@ -857,8 +857,6 @@ async function runProxyWorker(proxyIndex) {
       continue;
     }
 
-    console.log(`🛑 [P${proxyIndex}] Stopping for reset...`);
-
     // wait for all in-flight requests to finish
     while (inFlightRequests > 0) {
       await new Promise(r => setTimeout(r, 10));
@@ -867,8 +865,6 @@ async function runProxyWorker(proxyIndex) {
     // close everything
     try { await pool.close(); } catch {}
     try { await browser.close(); } catch {}
-
-    console.log(`♻️ [P${proxyIndex}] Rebuilding browser + contexts`);
 
     browser = await chromium.launch({
       headless: true,
