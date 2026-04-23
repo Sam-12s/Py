@@ -880,7 +880,7 @@ async function runProxyWorker(proxyIndex) {
     console.log(`✅ [P${proxyIndex}] Reset complete`);
 
     // only ONE worker should release reset
-    if (proxyIndex === 0 && RESET_RESOLVE) {
+    if (RESET_RESOLVE) {
       RESET_RESOLVE();
       RESET_RESOLVE = null;
       RESETTING = false;
@@ -970,8 +970,9 @@ async function runProxyWorker(proxyIndex) {
   
     while (!HARD_SHUTDOWN) {
       if (RESETTING) {
+        releaseRequestSlot();
         await RESET_PROMISE;
-        continue;
+        return;
       }
       if (recovery.RECOVERING_403) {
         await new Promise(r => setTimeout(r, 100));
