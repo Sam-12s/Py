@@ -9,7 +9,7 @@ const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
 let STOP_FLAG = false;
 let HARD_SHUTDOWN = false;
-const RESET_EVERY = 200000;
+const RESET_EVERY = 20000;
 let RESETTING = false;
 let RESET_LOCK = false;
 let RESET_PROMISE = null;
@@ -434,7 +434,8 @@ if (!isMainThread && workerData === "DB_WORKER") {
 // ============================================================
 let dbWorker;
 let dbReadyPromise;
-
+let LAST_RESET = 0;
+const RESET_COOLDOWN = 10000; // 10s
 if (isMainThread) {
   dbWorker = new Worker(__filename, { workerData: "DB_WORKER" });
 
@@ -482,10 +483,13 @@ function logStatus(code, status, proxyIndex) {
 
   globalStats.done++;
     // 🔥 TRIGGER RESET
-  if (globalStats.done % RESET_EVERY === 0 && !RESETTING) {
-    console.log(`🧹 RESET TRIGGERED at ${globalStats.done}`);
-
+  if (
+    globalStats.done % RESET_EVERY === 0 &&
+    !RESETTING &&
+    Date.now() - LAST_RESET > RESET_COOLDOWN
+  ) {
     RESETTING = true;
+    LAST_RESET = Date.now();
     RESET_PROMISE = new Promise(res => RESET_RESOLVE = res);
   }
   if (globalStats.done % 20000 !== 0) return;
@@ -853,7 +857,7 @@ async function runProxyWorker(proxyIndex) {
   async function handleGlobalReset() {
     while (!HARD_SHUTDOWN) {
   
-      if (!RESETTING || RESET_LOCK) {
+      if (!RESETTING) {
         await new Promise(r => setTimeout(r, 50));
         continue;
       }
@@ -889,7 +893,7 @@ async function runProxyWorker(proxyIndex) {
       console.log(`✅ [P${proxyIndex}] Reset complete`);
   
       // only ONE worker releases reset
-      if (proxyIndex === 0 && RESET_RESOLVE) {
+      if (RESET_RESOLVE) {
         RESET_RESOLVE();
         RESET_RESOLVE = null;
         RESETTING = false;
