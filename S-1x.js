@@ -11,6 +11,7 @@ let STOP_FLAG = false;
 let HARD_SHUTDOWN = false;
 const RESET_EVERY = 200000;
 let RESETTING = false;
+let RESET_LOCK = false;
 let RESET_PROMISE = null;
 let RESET_RESOLVE = null;
 const GLOBAL_RETRY_QUEUE = [];
@@ -640,9 +641,9 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
   const stats = proxyStats[proxyIndex];
   if (HARD_SHUTDOWN || STOP_FLAG) return;
   await acquireRequestSlot();
-  if (RESETTING) {
-  releaseRequestSlot();
-  return;
+  if (RESETTING || HARD_SHUTDOWN) {
+    releaseRequestSlot();
+    return;
   } 
   markActivity();
   await waitProxySlot(proxyIndex);
@@ -850,43 +851,53 @@ async function runProxyWorker(proxyIndex) {
   await pool.init();
   handleGlobalReset(); // 🔥 add this after pool.init()
   async function handleGlobalReset() {
-  while (!HARD_SHUTDOWN) {
-
-    if (!RESETTING) {
-      await new Promise(r => setTimeout(r, 50));
-      continue;
-    }
-
-    // wait for all in-flight requests to finish
-    while (inFlightRequests > 0) {
-      await new Promise(r => setTimeout(r, 10));
-    }
-
-    // close everything
-    try { await pool.close(); } catch {}
-    try { await browser.close(); } catch {}
-
-    browser = await chromium.launch({
-      headless: true,
-      proxy: {
-        server: proxy.server,
-        username: proxy.username,
-        password: proxy.password
+    while (!HARD_SHUTDOWN) {
+  
+      if (!RESETTING || RESET_LOCK) {
+        await new Promise(r => setTimeout(r, 50));
+        continue;
       }
-    });
-
-    await pool.rebuild(browser);
-
-    console.log(`✅ [P${proxyIndex}] Reset complete`);
-
-    // only ONE worker should release reset
-    if (RESET_RESOLVE) {
-      RESET_RESOLVE();
-      RESET_RESOLVE = null;
-      RESETTING = false;
+  
+      RESET_LOCK = true;
+  
+      console.log(`🛑 [P${proxyIndex}] Reset starting`);
+  
+      // wait ALL requests to finish
+      while (inFlightRequests > 0) {
+        await new Promise(r => setTimeout(r, 10));
+      }
+  
+      try { await pool.close(); } catch {}
+      try { await browser.close(); } catch {}
+  
+      try {
+        browser = await chromium.launch({
+          headless: true,
+          proxy: {
+            server: proxy.server,
+            username: proxy.username,
+            password: proxy.password
+          }
+        });
+  
+        await pool.rebuild(browser);
+  
+      } catch (err) {
+        console.log(`❌ [P${proxyIndex}] Reset failed: ${err.message}`);
+      }
+  
+      console.log(`✅ [P${proxyIndex}] Reset complete`);
+  
+      // only ONE worker releases reset
+      if (proxyIndex === 0 && RESET_RESOLVE) {
+        RESET_RESOLVE();
+        RESET_RESOLVE = null;
+        RESETTING = false;
+      }
+  
+      RESET_LOCK = false;
     }
   }
-}
   // =========================
   // RECOVERY SYSTEM
   // =========================
@@ -970,9 +981,9 @@ async function runProxyWorker(proxyIndex) {
   
     while (!HARD_SHUTDOWN) {
       if (RESETTING) {
-        releaseRequestSlot();
         await RESET_PROMISE;
-        return;
+        ctx = await pool.acquire(); // 🔥 CRITICAL FIX
+        continue;
       }
       if (recovery.RECOVERING_403) {
         await new Promise(r => setTimeout(r, 100));
