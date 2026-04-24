@@ -4,7 +4,7 @@
 const CONTEXTS_PER_PROXY = 4;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
-const MAX_RUNTIME_MINUTES = 350;
+const MAX_RUNTIME_MINUTES = 35;
 const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
 let STOP_FLAG = false;
@@ -15,7 +15,7 @@ let RESET_LOCK = false;
 let RESET_PROMISE = null;
 let RESET_RESOLVE = null;
 const GLOBAL_RETRY_QUEUE = [];
-const PART_INDEX = 2; // 0, 1, 2, 3 (choose which chunk to run)
+const PART_INDEX = 0; // 0, 1, 2, 3 (choose which chunk to run)
 const TOTAL_PARTS = 4;
 let globalStats = {
   ok: 0,
@@ -99,9 +99,9 @@ const CODE_PATTERN = "?????";
 // PREFIX GENERATION & SHUFFLE
 // ============================================================
 const SUFFIX_CHARS = [
-  "0","1","2","3","4","5","6","7","8","9",
+  "K","1","2","3","4","5","6","7","8","9",
   "A","B","C","D","E","F","G","H",
-  "J","K","L","M","N",
+  "J","0","L","M","N",
   "P","Q","R","S","T","U","V","W","X","Y","Z"
 ];
 
@@ -269,7 +269,7 @@ class ContextPool {
 
       // ✅ WARM-UP SESSION (ADD THIS)
       try {
-        await ctx.request.get("https://betongame-8963.top/en");
+        await ctx.request.get("https://1xlite-08668.world/en");
       } catch (e) {}
 
       this.pool.push(ctx);
@@ -605,8 +605,8 @@ function buildHeaders() {
     "content-type": "application/json;charset=UTF-8",
     "connection": "close",
     "is-srv": "false",
-    "Referer": "https://betongame-8963.top/en",
-    "Origin": "https://betongame-8963.top",
+    "Referer": "https://1xlite-08668.world/en",
+    "Origin": "https://1xlite-08668.world",
     "sec-ch-ua": SEC_CH_UA[Math.floor(Math.random() * SEC_CH_UA.length)],
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": ['"Windows"', '"macOS"', '"Linux"'][Math.floor(Math.random() * 3)],
@@ -652,12 +652,12 @@ async function fetchCode(ctx, item, proxyIndex, recovery) {
   markActivity();
   await waitProxySlot(proxyIndex);
   const { code, tried } = item;
-  const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 371 });
+  const payload = JSON.stringify({ "Guid": code, "Lng": "en", "partner": 1 });
 
     try {
       const startTime = Date.now();
       const resp = await ctx.request.post(
-        `https://betongame-8963.top/LiveUtil/GetCoupon`,
+        `https://1xlite-08668.world/service-api/LiveBet/Open/GetCoupon`,
         {
           timeout: 15000,
           headers: buildHeaders(),
@@ -1057,7 +1057,7 @@ async function runProxyWorker(proxyIndex) {
   
           // warm session
           try {
-            await ctx.request.get("https://indi-1xbet.com/en");
+            await ctx.request.get("https://1xlite-08668.world/en");
           } catch {}
   
           ctxRequests = 0;
