@@ -4,7 +4,7 @@
 const CONTEXTS_PER_PROXY = 4;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
-const MAX_RUNTIME_MINUTES = 69;
+const MAX_RUNTIME_MINUTES = 355;
 const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
 let STOP_FLAG = false;
@@ -15,7 +15,7 @@ let RESET_LOCK = false;
 let RESET_PROMISE = null;
 let RESET_RESOLVE = null;
 const GLOBAL_RETRY_QUEUE = [];
-const PART_INDEX = 0; // 0, 1, 2, 3 (choose which chunk to run)
+const PART_INDEX = 3; // 0, 1, 2, 3 (choose which chunk to run)
 const TOTAL_PARTS = 4;
 let globalStats = {
   ok: 0,
