@@ -15,7 +15,7 @@ let RESET_LOCK = false;
 let RESET_PROMISE = null;
 let RESET_RESOLVE = null;
 const GLOBAL_RETRY_QUEUE = [];
-const PART_INDEX = 3; // 0, 1, 2, 3 (choose which chunk to run)
+const PART_INDEX = 2; // 0, 1, 2, 3 (choose which chunk to run)
 const TOTAL_PARTS = 4;
 let globalStats = {
   ok: 0,
