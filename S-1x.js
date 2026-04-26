@@ -4,7 +4,7 @@
 const CONTEXTS_PER_PROXY = 4;
 const TOTAL_PER_PREFIX = 39304;
 const Database = require("better-sqlite3");
-const MAX_RUNTIME_MINUTES = 355;
+const MAX_RUNTIME_MINUTES = 185;
 const START_TIME = Date.now();
 const END_TIME = START_TIME + MAX_RUNTIME_MINUTES * 60 * 1000;
 let STOP_FLAG = false;
