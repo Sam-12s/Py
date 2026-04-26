@@ -557,7 +557,7 @@ function processResponse(response, local_code, session_id = "JS") {
       match_date.every(d => d === today_date) &&
       sports.every(s => s === "Football")
     ) {
-      if (number_of_event === 4 && total_result > 100 && total_result < 300) {
+      if (number_of_event === 4 && total_result > 80 && total_result < 300) {
         logCode("QUADRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
         return "VALID";
       }
@@ -565,7 +565,7 @@ function processResponse(response, local_code, session_id = "JS") {
         logCode("DOUBLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
         return "VALID";
       }
-      if (number_of_event === 3 && total_result > 100 && total_result < 300) {
+      if (number_of_event === 3 && total_result > 80 && total_result < 300) {
         logCode("TRIPLE", local_code, session_id, teams, events, outcomes, match_times, var_odd, total_odd, change_times);
         return "VALID";
       } 
